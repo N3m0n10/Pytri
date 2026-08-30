@@ -1,2 +1,2 @@
 # Pytri
- GUI vizualizer for Petri
+ GUI and vizualizer for Petri grafs
