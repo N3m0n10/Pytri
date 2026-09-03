@@ -10,6 +10,15 @@ class PETRI:
         self.actions = {}
         self.count_t = 0
 
+    def add_simulation(self, simulation: 'Simulation'):
+        self.simulation = simulation
+
+    def run_simulation(self):
+        if hasattr(self, 'simulation'):
+            self.simulation.run()
+        else:
+            print("No simulation has been added to this Petri net.")
+
     def add_ficha(self,place_name:str, ficha_count:int):
         if place_name in self.states:
             state = self.states[place_name]
@@ -46,9 +55,28 @@ class PETRI:
 
     def return_attr(self):
         return {"name":self.name,"states":self.states,"actions":self.actions,"transitions":self.transitions}
-
+    
     def EXPORT(self):
-        return {"states":self.states, "transitions":self.transitions, "actions":self.actions}
+            return {"states":self.states, "transitions":self.transitions, "actions":self.actions}
+
+class Simulation:
+    def __init__(self, petri_net: PETRI):
+        self.petri_net = petri_net
+
+    def run(self):
+        # This method will be implemented later to handle the simulation of the Petri net.
+        pass
+
+    def next_state(self):
+        # This method will be implemented later to handle the logic of moving to the next transition.
+        pass
+    
+    def enabled_transitions(self, transition_name:str):
+        pass
+    
+    def fire_transition(self, transition_name:str):
+        pass
+    
 
 class State:
     def __init__(self, name:str, description:str = ""):
@@ -63,6 +91,7 @@ class Transition:
         self.description = description
         self.source = source
         self.target = target
+        #self.type = 0 # There are pre, post, read, inhibitor... (TODO later)
 
 class Action:
     def __init__(self, name:str, description:str,enum):
@@ -70,6 +99,7 @@ class Action:
         self.description = description
         self.enum = enum
 
+# CLI
 if __name__ == "__main__":
 
     Petri = PETRI("My Petri Net")
