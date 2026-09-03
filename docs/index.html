@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Petri Net Prototyper</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="sidebar">
+    <div>
+      <h1>Petri Net Prototyper</h1>
+      <input id="netname" value="Untitled Net">
+    </div>
+
+    <button id="theme-toggle">🌙 Dark mode</button>
+
+    <div class="group">
+      <h2>Build</h2>
+      <button id="mode-select" class="active">↖ Select / Move</button>
+      <button id="mode-state">◯ Add Place (State)</button>
+      <button id="mode-action">▮ Add Transition (Action)</button>
+      <button id="mode-arc">→ Add Arc</button>
+    </div>
+
+    <div class="group">
+      <h2>File</h2>
+      <button id="btn-new">New net</button>
+      <button id="btn-export">Export JSON</button>
+      <button id="btn-import">Import JSON…</button>
+      <input type="file" id="file-input" accept="application/json" hidden>
+    </div>
+
+    <div id="hint">
+      Click "Add Place" or "Add Transition", then click on the canvas to drop a node.
+      Switch to "Add Arc" and click a source node then a target node to connect them.
+      Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.
+    </div>
+
+    <div id="inspector" hidden></div>
+    <div id="error"></div>
+  </div>
+
+  <div id="canvas-wrap">
+    <svg id="svg" width="2000" height="1400">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path class="arc-marker" d="M0,0 L0,6 L8,3 z"></path>
+        </marker>
+        <marker id="inhibitor-head" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto">
+          <circle class="arc-marker" cx="4" cy="4" r="3.4" fill="var(--paper)" stroke-width="1.4"></circle>
+        </marker>
+      </defs>
+      <g id="arcs-layer"></g>
+      <g id="nodes-layer"></g>
+    </svg>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
