@@ -1,2 +1,14 @@
-# Pytri
- GUI and vizualizer for Petri grafs
+# Petri Net Prototyper
+
+## Run it
+    pip install -r requirements.txt
+    python3 app.py
+Then open http://127.0.0.1:5000
+
+## Files
+- `petri.py`   -- core model (framework-agnostic). Also runnable standalone as a CLI: `python3 petri.py`.
+- `app.py`     -- Flask backend, thin REST wrapper around petri.py.
+- `templates/index.html` -- single-page canvas GUI (vanilla JS/SVG, no build step).
+
+No simulation is implemented yet -- the `Simulation` class in petri.py is
+intentionally left as a stub for a later milestone.
