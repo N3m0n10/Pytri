@@ -1,0 +1,5 @@
+* Handle progressive naming when a stance is deleated [ ]
+* Create and validate de A matrix asked or in simulation [ ]
+* Creating a specific place for simulation (class) [ ]
+* Use the A matriz, actual state inputs and transition to fast-simulation [ ]
+* Prepare for tree impelmantation [ ] 
