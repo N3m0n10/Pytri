@@ -233,6 +233,10 @@ class PETRI:
             raise ValueError("Token count cannot be negative.")
         self.states[place_name].ficha_count = count
 
+    @classmethod
+    def sort_states(self):
+        pass
+
     # ---- actions (transitions) ------------------------------------------#
     def add_action(self, action: 'Action'):
         if action.name in self.actions:
@@ -292,6 +296,24 @@ class PETRI:
             raise NotFoundError(f"Transition (arc) '{name}' does not exist.")
         del self.transitions[name]
 
+    # ---- matrix -----------------------------------------------------------
+    @property
+    def incidence_matrix(self):
+        matrix = []
+        for state in self.states:
+            for tr in self.transitions:
+                if self.transitions[tr].source.name == state:
+                    matrix.append(self.transitions[tr].weight)
+                elif self.transitions[tr].target.name == state:
+                    matrix.append(-self.transitions[tr].weight)
+                else:
+                    matrix.append(0)
+        return matrix
+
+    @property
+    def output_matrix(self):
+        return [state.ficha_count for state in self.states]
+    
     # ---- inspection -------------------------------------------------------#
     def arcs_of(self, node_name: str):
         """All arcs touching a given State/Action, split into incoming/outgoing."""
@@ -305,6 +327,16 @@ class PETRI:
     # work. What's here is the net-level firing rule itself: whether an
     # action's preconditions hold, and what firing it does to the marking.
     # This is what a simulation loop will call into.
+
+    def update_state_output_matrix(self):
+        for i , state in self.states.values():
+            state.ficha_count = self.output_matrix[i] 
+        # NOTE: since dict maintain insertion order, the order of states in self.states.values()
+        # is consistent with the order of the output matrix. If the matrix is properly updated 
+        # after fitings and entity added/removed/alterated. 
+
+    def calc_state_by_matrix(self, transitions_fired:list):
+        pass
 
     def pre_arcs(self, action_name: str):
         """Input arcs (State -> Action) feeding a given action."""
@@ -370,6 +402,13 @@ class PETRI:
         for t in self.transitions.values():
             print(f"  - {t.name}: {t.description} ({t.source.name} -> {t.target.name}) "
                   f"[side={t.side}, weight={t.weight}, type={t.arc_type}]")
+        print("----------------------------------")
+        table = self.incidence_matrix
+        print("Incidence Matrix:")
+        print("   " + " ".join(f"{name:>5}" for name in self.transitions))
+        for i, state in enumerate(self.states):
+            row = table[i * len(self.transitions):(i + 1) * len(self.transitions)]
+            print(f"{state:>3} " + " ".join(f"{val:>5}" for val in row))
 
     def return_attr(self):
         return {"name": self.name, "states": self.states,

@@ -87,18 +87,43 @@
   .action rect.selected { stroke: var(--accent); stroke-width: 3px; }
   .action rect.enabled { fill: var(--enabled); }
   .arc-marker { fill: var(--arc); stroke: var(--arc); }
-  .arc line { stroke: var(--arc); stroke-width: 1.6; cursor: pointer; }
-  .arc line.type-normal, .arc line.type-read { marker-end: url(#arrow); }
-  .arc line.type-inhibitor { marker-end: url(#inhibitor-head); }
-  .arc line.type-read { stroke-dasharray: 5 4; }
-  .arc line.selected { stroke: var(--accent); stroke-width: 2.4; }
+  .arc path { fill: none; stroke: var(--arc); stroke-width: 1.6; cursor: pointer; }
+  .arc path.type-normal, .arc path.type-read { marker-end: url(#arrow); }
+  .arc path.type-inhibitor { marker-end: url(#inhibitor-head); }
+  .arc path.type-read { stroke-dasharray: 5 4; }
+  .arc path.selected { stroke: var(--accent); stroke-width: 2.4; }
   .arc-label { font-size: 11px; fill: var(--arc); cursor: move; }
+  .bend-handle { fill: var(--surface); stroke: var(--accent); stroke-width: 1.4; cursor: grab; }
+  .bend-guide { stroke: var(--accent-soft); stroke-width: 1; stroke-dasharray: 3 3; }
   .arc line.pending { stroke-dasharray: 4 3; }
   #error {
     position: absolute; bottom: 14px; left: 14px; background: var(--danger);
     color: white; padding: 8px 12px; border-radius: 6px; font-size: 13px;
     display: none; max-width: 60%;
   }
+  .placeholder-box {
+    border: 1px dashed var(--line); border-radius: 6px; padding: 16px;
+    font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.5;
+  }
+  #topbar { display: flex; gap: 8px; }
+  #topbar button { flex: 1; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(20, 17, 12, 0.45);
+    display: none; align-items: center; justify-content: center; z-index: 1000;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal-box {
+    position: relative; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px;
+    width: 380px; max-width: 88vw; max-height: 78vh; overflow-y: auto;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+  }
+  .modal-box h2 { margin: 0 0 10px 0; font-size: 16px; }
+  .modal-close {
+    position: absolute; top: 8px; right: 10px; border: none; background: transparent;
+    color: var(--ink); font-size: 16px; line-height: 1; cursor: pointer; padding: 6px 8px;
+  }
+  .modal-close:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -109,7 +134,10 @@
     <input id="netname" value="Untitled Net" />
   </div>
 
-  <button id="theme-toggle">🌙 Dark mode</button>
+  <div id="topbar">
+    <button id="theme-toggle">🌙 Dark mode</button>
+    <button id="btn-help">❓ Help</button>
+  </div>
 
   <div class="group">
     <h2>Build</h2>
@@ -127,6 +155,12 @@
     <input type="file" id="file-input" accept="application/json" style="display:none" />
   </div>
 
+  <div class="group">
+    <h2>Simulation</h2>
+    <div class="placeholder-box">Simulation controls will live here — stepping,
+    firing enabled actions, and a run/pause loop are coming in a later milestone.</div>
+  </div>
+
   <div id="hint">Click "Add Place" or "Add Transition", then click on the
   canvas to drop a node. Switch to "Add Arc" and click a source node then a
   target node to connect them. Drag a node's body to move it, or drag its
@@ -135,6 +169,15 @@
   <div id="inspector" style="display:none"></div>
   <div id="error"></div>
 </div>
+
+<div id="modal-backdrop" class="modal-backdrop">
+  <div id="modal-box" class="modal-box">
+    <button id="modal-close" class="modal-close">✕</button>
+    <h2>Instructions</h2>
+    <p class="muted">Instructions for using the editor will go here.</p>
+  </div>
+</div>
+
 
 <div id="canvas-wrap">
   <svg id="svg" width="2000" height="1400">
@@ -165,9 +208,10 @@ let arcSource = null;      // name of first-clicked node when adding an arc
 let selected = null;       // {kind:'state'|'action'|'transition', name}
 let dragging = null;       // name of node currently being dragged
 let draggingLabel = null;  // {kind, name} of a label being repositioned
+let draggingBend = null;   // name of arc whose curve handle is being dragged
 
 const HINTS = {
-  select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, or drag its label to reposition just the text.',
+  select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, drag its label to reposition just the text, or drag a selected arc\'s handle to curve it.',
   state: 'Click on the canvas to place a new State (a place that holds tokens).',
   action: 'Click on the canvas to place a new Action (a transition bar).',
   arc: 'Click a source node, then a target node, to connect them with an arc.',
@@ -184,6 +228,21 @@ document.getElementById('theme-toggle').onclick = () => {
   localStorage.setItem('petri-theme', next);
   applyTheme(next);
 };
+
+// ---- help modal -----------------------------------------------------------
+// A floating panel (not full-screen) that blocks the rest of the UI while
+// open. Closes via the X button, clicking the backdrop, or Escape.
+const modalBackdrop = document.getElementById('modal-backdrop');
+function openModal() { modalBackdrop.classList.add('open'); }
+function closeModal() { modalBackdrop.classList.remove('open'); }
+document.getElementById('btn-help').onclick = openModal;
+document.getElementById('modal-close').onclick = closeModal;
+modalBackdrop.addEventListener('click', (e) => {
+  if (e.target === modalBackdrop) closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
 
 function setMode(m) {
   mode = m;
@@ -260,7 +319,7 @@ function nodeKind(name) {
 }
 
 svg.addEventListener('click', async (e) => {
-  if (dragging || draggingLabel) return; // click fired right after a drag; ignore
+  if (dragging || draggingLabel || draggingBend) return; // click fired right after a drag; ignore
   const pt = svgPoint(e);
   const hit = e.target.closest('[data-name]');
 
@@ -346,7 +405,32 @@ function boundaryPoint(node, kind, towardX, towardY) {
   return rectBoundaryPoint(node.x, node.y, 10, 30, node.rotation || 0, towardX, towardY);
 }
 
-// ---- dragging node bodies and labels in select mode -----------------------
+function arcPointsFor(t) {
+  const s = findNode(t.source), tg = findNode(t.target);
+  if (!s || !tg) return null;
+  const sKind = nodeKind(t.source), tKind = nodeKind(t.target);
+  const p1 = boundaryPoint(s, sKind, tg.x, tg.y);
+  const p2 = boundaryPoint(tg, tKind, s.x, s.y);
+  const geo = arcGeometry(p1, p2, t.bend || 0);
+  return { p1, p2, ...geo };
+}
+
+// ---- geometry: curved arcs (quadratic Bezier bent away from the straight line)
+function arcGeometry(p1, p2, bend) {
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  const len = Math.sqrt(dx*dx + dy*dy) || 1;
+  const nx = -dy / len, ny = dx / len;  // unit normal to the straight line
+  const control = { x: mid.x + nx * bend, y: mid.y + ny * bend };
+  // point at t=0.5 on the quadratic Bezier -- used to anchor the label
+  const curveMid = {
+    x: 0.25*p1.x + 0.5*control.x + 0.25*p2.x,
+    y: 0.25*p1.y + 0.5*control.y + 0.25*p2.y,
+  };
+  return { mid, normal: {x: nx, y: ny}, control, curveMid };
+}
+
+// ---- dragging node bodies, labels, and arc bend handles in select mode ----
 nodesLayer.addEventListener('mousedown', (e) => {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
@@ -359,13 +443,16 @@ nodesLayer.addEventListener('mousedown', (e) => {
 });
 arcsLayer.addEventListener('mousedown', (e) => {
   if (mode !== 'select') return;
-  if (e.target.dataset.role !== 'label') return;
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
-  draggingLabel = { kind: 'transition', name: hit.dataset.name };
+  if (e.target.dataset.role === 'label') {
+    draggingLabel = { kind: 'transition', name: hit.dataset.name };
+  } else if (e.target.dataset.role === 'bend-handle') {
+    draggingBend = hit.dataset.name;
+  }
 });
 svg.addEventListener('mousemove', (e) => {
-  if (!dragging && !draggingLabel) return;
+  if (!dragging && !draggingLabel && !draggingBend) return;
   const pt = svgPoint(e);
   if (dragging) {
     const node = findNode(dragging);
@@ -373,15 +460,25 @@ svg.addEventListener('mousemove', (e) => {
   } else if (draggingLabel) {
     if (draggingLabel.kind === 'transition') {
       const t = netData.transitions.find(x => x.name === draggingLabel.name);
-      const s = findNode(t.source), tg = findNode(t.target);
-      if (t && s && tg) {
-        t.label_dx = pt.x - (s.x + tg.x) / 2;
-        t.label_dy = pt.y - (s.y + tg.y) / 2;
+      const geo = t && arcPointsFor(t);
+      if (geo) {
+        t.label_dx = pt.x - geo.curveMid.x;
+        t.label_dy = pt.y - geo.curveMid.y;
         render();
       }
     } else {
       const node = findNode(draggingLabel.name);
       if (node) { node.label_dx = pt.x - node.x; node.label_dy = pt.y - node.y; render(); }
+    }
+  } else if (draggingBend) {
+    const t = netData.transitions.find(x => x.name === draggingBend);
+    const geo = t && arcPointsFor(t);
+    if (geo) {
+      // signed distance from the mouse point to the straight p1-p2 line,
+      // measured along the line's normal -- that *is* the bend value.
+      const v = { x: pt.x - geo.mid.x, y: pt.y - geo.mid.y };
+      t.bend = v.x * geo.normal.x + v.y * geo.normal.y;
+      render();
     }
   }
 });
@@ -410,6 +507,15 @@ window.addEventListener('mouseup', async () => {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({dx: node.label_dx, dy: node.label_dy})});
     }
+    await refresh();
+  }
+  if (draggingBend) {
+    const name = draggingBend;
+    const t = netData.transitions.find(x => x.name === name);
+    draggingBend = null;
+    if (t) await api(`/api/transition/${encodeURIComponent(name)}/curve`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({bend: t.bend || 0})});
     await refresh();
   }
 });
@@ -441,6 +547,9 @@ function renderInspector() {
             <option value="inhibitor" ${t.arc_type==='inhibitor'?'selected':''}>inhibitor</option>
             <option value="read" ${t.arc_type==='read'?'selected':''}>read (test)</option>
           </select></div>` : `<div class="muted">Type: ${t.arc_type} (output arcs are always normal)</div>`}
+      <div class="row"><label>Curve</label>
+        <input id="insp-bend" type="number" step="5" value="${Math.round(t.bend || 0)}" />
+        <button id="insp-straighten">Straighten</button></div>
       <button class="danger" id="insp-delete">Delete arc</button>`;
 
     const applyArcChange = async () => {
@@ -451,10 +560,23 @@ function renderInspector() {
         await api('/api/transition', {method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({name: t.name, description: t.description,
             source: t.source, target: t.target, weight, arc_type})});
+        if (t.bend) await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend: t.bend})});
       } finally { await refresh(); selectNode('transition', t.name); }
     };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
+    document.getElementById('insp-bend').onchange = async (e) => {
+      const bend = parseFloat(e.target.value || '0');
+      await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend})});
+      await refresh(); selectNode('transition', t.name);
+    };
+    document.getElementById('insp-straighten').onclick = async () => {
+      await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend: 0})});
+      await refresh(); selectNode('transition', t.name);
+    };
     document.getElementById('insp-delete').onclick = async () => {
       await api(`/api/transition/${encodeURIComponent(t.name)}`, {method:'DELETE'});
       selected = null; await refresh();
@@ -520,25 +642,38 @@ function render() {
   nodesLayer.innerHTML = '';
 
   for (const t of netData.transitions) {
-    const s = findNode(t.source), tg = findNode(t.target);
-    if (!s || !tg) continue;
-    const sKind = nodeKind(t.source), tKind = nodeKind(t.target);
-    const p1 = boundaryPoint(s, sKind, tg.x, tg.y);
-    const p2 = boundaryPoint(tg, tKind, s.x, s.y);
+    const geo = arcPointsFor(t);
+    if (!geo) continue;
+    const { p1, p2, mid, control, curveMid } = geo;
+    const isSelected = selected && selected.kind==='transition' && selected.name===t.name;
 
     const g = document.createElementNS(svg.namespaceURI, 'g');
     g.setAttribute('class', 'arc');
     g.dataset.name = t.name; g.dataset.kind = 'transition';
-    const line = document.createElementNS(svg.namespaceURI, 'line');
-    line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
-    line.setAttribute('x2', p2.x); line.setAttribute('y2', p2.y);
-    line.setAttribute('class', 'type-' + t.arc_type + (selected && selected.kind==='transition' && selected.name===t.name ? ' selected' : ''));
-    line.dataset.name = t.name; line.dataset.kind = 'transition';
-    line.addEventListener('click', (e) => { if (mode==='select'){ e.stopPropagation(); selectNode('transition', t.name); }});
-    g.appendChild(line);
 
-    const midX = (s.x + tg.x) / 2 + (t.label_dx ?? 6);
-    const midY = (s.y + tg.y) / 2 + (t.label_dy ?? -6);
+    const path = document.createElementNS(svg.namespaceURI, 'path');
+    path.setAttribute('d', `M ${p1.x} ${p1.y} Q ${control.x} ${control.y} ${p2.x} ${p2.y}`);
+    path.setAttribute('class', 'type-' + t.arc_type + (isSelected ? ' selected' : ''));
+    path.dataset.name = t.name; path.dataset.kind = 'transition';
+    path.addEventListener('click', (e) => { if (mode==='select'){ e.stopPropagation(); selectNode('transition', t.name); }});
+    g.appendChild(path);
+
+    if (isSelected) {
+      const guide = document.createElementNS(svg.namespaceURI, 'line');
+      guide.setAttribute('class', 'bend-guide');
+      guide.setAttribute('x1', p1.x); guide.setAttribute('y1', p1.y);
+      guide.setAttribute('x2', p2.x); guide.setAttribute('y2', p2.y);
+      g.appendChild(guide);
+      const handle = document.createElementNS(svg.namespaceURI, 'circle');
+      handle.setAttribute('class', 'bend-handle');
+      handle.setAttribute('cx', control.x); handle.setAttribute('cy', control.y);
+      handle.setAttribute('r', 6);
+      handle.dataset.name = t.name; handle.dataset.kind = 'transition'; handle.dataset.role = 'bend-handle';
+      g.appendChild(handle);
+    }
+
+    const midX = curveMid.x + (t.label_dx ?? 6);
+    const midY = curveMid.y + (t.label_dy ?? -6);
     const labelText = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
     const label = document.createElementNS(svg.namespaceURI, 'text');
     label.setAttribute('x', midX); label.setAttribute('y', midY);

@@ -26,6 +26,7 @@ app = Flask(__name__)
 net = PETRI("Untitled Net")
 positions = {}          # node name -> {"x":, "y":, "rotation":, "label_dx":, "label_dy":}
 arc_labels = {}         # arc name -> {"label_dx":, "label_dy":}
+arc_curves = {}         # arc name -> {"bend": float}  (perpendicular offset of the curve's control point)
 
 
 def node_kind(name):
@@ -62,6 +63,7 @@ def net_payload():
                 "source": t.source.name, "target": t.target.name,
                 "weight": t.weight, "arc_type": t.arc_type, "side": t.side,
                 **{"label_dx": 6, "label_dy": -6, **arc_labels.get(t.name, {})},
+                **{"bend": 0, **arc_curves.get(t.name, {})},
             }
             for t in net.transitions.values()
         ],
@@ -84,11 +86,12 @@ def get_net():
 
 @app.route("/api/net/new", methods=["POST"])
 def new_net():
-    global net, positions, arc_labels
+    global net, positions, arc_labels, arc_curves
     data = request.get_json(force=True) or {}
     net = PETRI(data.get("name", "Untitled Net"))
     positions = {}
     arc_labels = {}
+    arc_curves = {}
     return jsonify(net_payload())
 
 
@@ -268,6 +271,7 @@ def delete_transition(name):
     except PetriError as e:
         return err(e)
     arc_labels.pop(name, None)
+    arc_curves.pop(name, None)
     return jsonify(net_payload())
 
 
@@ -280,11 +284,28 @@ def move_transition_label(name):
     return jsonify(net_payload())
 
 
+@app.route("/api/transition/<name>/curve", methods=["POST"])
+def curve_transition(name):
+    """Bend an arc away from the straight line between its endpoints.
+    `bend` is a signed pixel offset for the curve's control point,
+    perpendicular to the straight line; 0 means straight."""
+    data = request.get_json(force=True) or {}
+    if name not in net.transitions:
+        return err(f"No arc named '{name}'.", 404)
+    try:
+        bend = float(data.get("bend", 0))
+    except (TypeError, ValueError):
+        return err("bend must be a number.")
+    arc_curves[name] = {"bend": bend}
+    return jsonify(net_payload())
+
+
 @app.route("/api/export", methods=["GET"])
 def export_net():
     payload = net.to_dict()
     payload["_positions"] = positions
     payload["_arc_labels"] = arc_labels
+    payload["_arc_curves"] = arc_curves
     buf = io.BytesIO(json.dumps(payload, indent=2).encode("utf-8"))
     buf.seek(0)
     return send_file(buf, mimetype="application/json", as_attachment=True,
@@ -293,14 +314,16 @@ def export_net():
 
 @app.route("/api/import", methods=["POST"])
 def import_net():
-    global net, positions, arc_labels
+    global net, positions, arc_labels, arc_curves
     data = request.get_json(force=True) or {}
     try:
         loaded_positions = data.pop("_positions", {})
         loaded_arc_labels = data.pop("_arc_labels", {})
+        loaded_arc_curves = data.pop("_arc_curves", {})
         net = PETRI.from_dict(data)
         positions = loaded_positions
         arc_labels = loaded_arc_labels
+        arc_curves = loaded_arc_curves
     except Exception as e:
         return err(f"Could not load file: {e}")
     return jsonify(net_payload())

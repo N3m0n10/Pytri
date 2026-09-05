@@ -2,4 +2,5 @@
 * Create and validate de A matrix asked or in simulation [ ]
 * Creating a specific place for simulation (class) [ ]
 * Use the A matriz, actual state inputs and transition to fast-simulation [ ]
-* Prepare for tree impelmantation [ ] 
+* Prepare for tree implemantation [ ] 
+* Save last n states to create CTRL C,V [ ]
