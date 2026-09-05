@@ -17,6 +17,7 @@ let arcSource = null;
 let selected = null;
 let dragging = null;
 let draggingLabel = null;
+let panning = null;
 let dragMoved = false;
 let matrixView = 'incidence';
 let matrixOpen = false;
@@ -621,6 +622,22 @@ svg.addEventListener('click', e => {
   }
 });
 
+svg.addEventListener('pointerdown', e => {
+  // On touch, drag an empty canvas to pan it. Node dragging keeps priority.
+  if (e.pointerType === 'touch' && mode === 'select' && !e.target.closest('[data-name]')) {
+    e.preventDefault();
+    const wrap = document.getElementById('canvas-wrap');
+    panning = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: wrap.scrollLeft,
+      scrollTop: wrap.scrollTop
+    };
+    svg.setPointerCapture?.(e.pointerId);
+  }
+});
+
 nodesLayer.addEventListener('pointerdown', e => {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
@@ -643,6 +660,14 @@ arcsLayer.addEventListener('pointerdown', e => {
 });
 
 svg.addEventListener('pointermove', e => {
+  if (panning && e.pointerId === panning.pointerId) {
+    e.preventDefault();
+    const wrap = document.getElementById('canvas-wrap');
+    wrap.scrollLeft = panning.scrollLeft - (e.clientX - panning.startX);
+    wrap.scrollTop = panning.scrollTop - (e.clientY - panning.startY);
+    dragMoved = true;
+    return;
+  }
   if (!dragging && !draggingLabel) return;
   e.preventDefault();
   dragMoved = true;
@@ -676,6 +701,10 @@ svg.addEventListener('pointermove', e => {
 });
 
 window.addEventListener('pointerup', () => {
+  if (panning) {
+    panning = null;
+    return;
+  }
   if (dragging || draggingLabel) {
     saveLocal();
     dragging = null;

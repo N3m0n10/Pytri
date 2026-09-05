@@ -336,6 +336,10 @@ button, input, textarea, select { touch-action: manipulation; }
     border-right: none; border-bottom: 1px solid var(--line);
     padding: 9px; gap: 9px; overflow-y: auto;
   }
+  /* The menu must remain natively vertically scrollable on touch. */
+  #sidebar { touch-action: pan-y; overscroll-behavior: contain; }
+  #canvas-wrap { touch-action: none; }
+
   .mobile-sidebar-head { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .group { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 5px; }
   .group h2 { grid-column: 1 / -1; }
