@@ -15,5 +15,6 @@ intentionally left as a stub for a later milestone.
 
 ## Run online
 
-You can use https://github.io/N3m0n10/Pytri for running it online. 
-This version is a build in css/js and is placed at */docs*
+You can use [https://github.io/N3m0n10/Pytri](online_version) for running it online. 
+This version is a build in css/js and is placed at */docs*!
+It also works with mobile!
