@@ -2,58 +2,125 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Petri Net Prototyper</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="sidebar">
-    <div>
-      <h1>Petri Net Prototyper</h1>
-      <input id="netname" value="Untitled Net">
+  <header id="topbar">
+    <div class="brand">
+      <div class="brand-mark">△</div>
+      <div class="brand-name">Pytri</div>
+      <div class="brand-separator"></div>
+      <input id="netname" value="Untitled Net" aria-label="Net name">
     </div>
-
-    <button id="theme-toggle">🌙 Dark mode</button>
-
-    <div class="group">
-      <h2>Build</h2>
-      <button id="mode-select" class="active">↖ Select / Move</button>
-      <button id="mode-state">◯ Add Place (State)</button>
-      <button id="mode-action">▮ Add Transition (Action)</button>
-      <button id="mode-arc">→ Add Arc</button>
+    <div class="top-actions">
+      <button id="theme-toggle">🌙 Dark mode</button>
+      <button id="help-toggle">❓ Help</button>
     </div>
+  </header>
 
-    <div class="group">
-      <h2>File</h2>
-      <button id="btn-new">New net</button>
-      <button id="btn-export">Export JSON</button>
-      <button id="btn-import">Import JSON…</button>
-      <input type="file" id="file-input" accept="application/json" hidden>
-    </div>
+  <main id="workspace">
+    <aside id="sidebar">
+      <div class="mobile-sidebar-head"><span>Tools</span></div>
 
-    <div id="hint">
-      Click "Add Place" or "Add Transition", then click on the canvas to drop a node.
-      Switch to "Add Arc" and click a source node then a target node to connect them.
-      Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.
-    </div>
+      <div class="group">
+        <h2>Build</h2>
+        <button id="mode-select" class="active">↖ Select / Move</button>
+        <button id="mode-state">◯ Add Place (State)</button>
+        <button id="mode-action">▮ Add Transition (Action)</button>
+        <button id="mode-arc">→ Add Arc</button>
+      </div>
 
-    <div id="inspector" hidden></div>
-    <div id="error"></div>
-  </div>
+      <div class="group">
+        <h2>File</h2>
+        <button id="btn-new">New net</button>
+        <button id="btn-export">Export JSON</button>
+        <button id="btn-import">Import JSON…</button>
+        <input type="file" id="file-input" accept="application/json" hidden>
+      </div>
 
-  <div id="canvas-wrap">
-    <svg id="svg" width="2000" height="1400">
-      <defs>
-        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-          <path class="arc-marker" d="M0,0 L0,6 L8,3 z"></path>
-        </marker>
-        <marker id="inhibitor-head" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto">
-          <circle class="arc-marker" cx="4" cy="4" r="3.4" fill="var(--paper)" stroke-width="1.4"></circle>
-        </marker>
-      </defs>
-      <g id="arcs-layer"></g>
-      <g id="nodes-layer"></g>
-    </svg>
+      <div class="group">
+        <h2>View</h2>
+        <button id="matrix-toggle">▦ Matrices</button>
+      </div>
+
+      <div id="matrix-panel" hidden>
+        <div class="matrix-tabs">
+          <button id="matrix-incidence-tab" class="active">Incidence</button>
+          <button id="matrix-output-tab">Marking</button>
+        </div>
+        <div id="matrix-content"></div>
+        <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
+      </div>
+
+      <div id="hint">Click "Add Place" or "Add Transition", then click on the canvas to drop a node. Switch to "Add Arc" and click a source node then a target node to connect them. Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.</div>
+
+      <div id="inspector" hidden></div>
+      <div id="error"></div>
+    </aside>
+
+    <section id="canvas-wrap">
+      <div id="canvas-toolbar">
+        <button id="zoom-in" title="Zoom in">⌕+</button>
+        <button id="zoom-out" title="Zoom out">⌕−</button>
+        <button id="zoom-reset" title="Reset zoom">⛶</button>
+      </div>
+      <svg id="svg" width="2000" height="1400">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <path class="arc-marker" d="M0,0 L0,6 L8,3 z"></path>
+          </marker>
+          <marker id="inhibitor-head" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto">
+            <circle class="arc-marker" cx="4" cy="4" r="3.4" fill="var(--paper)" stroke-width="1.4"></circle>
+          </marker>
+        </defs>
+        <g id="arcs-layer"></g>
+        <g id="nodes-layer"></g>
+      </svg>
+    </section>
+  </main>
+
+  <div id="help-modal" hidden>
+    <div id="help-backdrop"></div>
+    <section id="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <button id="help-close" class="modal-close" aria-label="Close help">×</button>
+      <h2 id="help-title">❓ Help &amp; Shortcuts</h2>
+      <div class="help-tabs">
+        <button id="help-usage-tab" class="active">How to use</button>
+        <button id="help-shortcuts-tab">Keyboard shortcuts</button>
+      </div>
+
+      <div id="help-usage" class="help-page">
+        <div class="help-columns">
+          <div>
+            <article class="help-item"><span class="help-icon">◯</span><div><h3>Create elements</h3><p>Use the toolbar to add places, transitions and arcs. Click on the canvas to place an element.</p></div></article>
+            <article class="help-item"><span class="help-icon">↗</span><div><h3>Connect elements</h3><p>Choose <b>Add Arc</b>, then click a source element and a target element. Configure the arc type and weight in the inspector.</p></div></article>
+            <article class="help-item"><span class="help-icon">✎</span><div><h3>Edit</h3><p>Select an element to move, rename, rotate or delete it. Drag labels independently to reposition them.</p></div></article>
+          </div>
+          <div>
+            <article class="help-item"><span class="help-icon">▦</span><div><h3>Matrices</h3><p>The incidence matrix describes the relation between places and arcs. The marking vector shows the current number of tokens in each place.</p></div></article>
+            <article class="help-item"><span class="help-icon">⇩</span><div><h3>Save / Load</h3><p>Your current net is saved automatically in the browser. Use Export / Import JSON to move a net between browsers or devices.</p></div></article>
+            <article class="help-item"><span class="help-icon">📱</span><div><h3>Mobile</h3><p>Tap and drag elements on touch screens. The canvas can be scrolled horizontally and vertically for larger nets.</p></div></article>
+          </div>
+        </div>
+      </div>
+
+      <div id="help-shortcuts" class="help-page" hidden>
+        <div class="shortcut-list">
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>Y</kbd><span>Redo</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd><span>Export net (JSON)</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>O</kbd><span>Import net (JSON)</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>M</kbd><span>Toggle matrices</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>D</kbd><span>Toggle dark mode</span></div>
+          <div><kbd>Delete</kbd><span>Delete selected element</span></div>
+          <div><kbd>Space</kbd><span>Fire selected transition</span></div>
+          <div><kbd>Esc</kbd><span>Deselect / cancel</span></div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script src="js/app.js"></script>

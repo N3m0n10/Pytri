@@ -18,6 +18,14 @@ let selected = null;
 let dragging = null;
 let draggingLabel = null;
 let dragMoved = false;
+let matrixView = 'incidence';
+let matrixOpen = false;
+
+const MAX_HISTORY = 80;
+let history = [];
+let historyIndex = -1;
+let restoringHistory = false;
+let svgZoom = 1;
 
 const HINTS = {
   select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, or drag its label to reposition just the text.',
@@ -36,12 +44,51 @@ function emptyNet(name) {
   };
 }
 
-function nextName(kind) {
+// Name allocation is deliberately split into "suggest" and "commit".
+// A failed/cancelled name dialog must NOT consume the next number.
+// Removed automatic names are kept in a reuse buffer, matching petri.py's
+// _removed_*_names behaviour.
+const renameBuffer = { state: [], action: [], transition: [] };
+
+function nameTaken(name) {
+  return !!findNode(name) || netData.transitions.some(t => t.name === name);
+}
+
+function syncRenameBuffer() {
+  // Imported/old localStorage data may not have the buffer. Keep only names
+  // that are currently free and unique.
+  for (const kind of Object.keys(renameBuffer)) {
+    renameBuffer[kind] = [...new Set(renameBuffer[kind])].filter(n => !nameTaken(n));
+  }
+}
+
+function suggestName(kind) {
+  syncRenameBuffer();
+  if (renameBuffer[kind].length) return renameBuffer[kind][0];
+
   const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
-  while (true) {
-    netData.counters[kind]++;
-    const name = prefix + netData.counters[kind];
-    if (!findNode(name) && !netData.transitions.some(t => t.name === name)) return name;
+  let seq = Number(netData.counters[kind] || 0);
+  while (nameTaken(`${prefix}${seq + 1}`)) seq++;
+  return `${prefix}${seq + 1}`;
+}
+
+function commitName(kind, name) {
+  // A name from the reuse buffer is consumed only after successful creation.
+  const bufferIndex = renameBuffer[kind].indexOf(name);
+  if (bufferIndex >= 0) {
+    renameBuffer[kind].splice(bufferIndex, 1);
+    return;
+  }
+
+  const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
+  const match = new RegExp(`^${prefix}(\\d+)$`).exec(name);
+  if (match) netData.counters[kind] = Math.max(netData.counters[kind], Number(match[1]));
+}
+
+function rememberRemovedName(kind, name) {
+  const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
+  if (new RegExp(`^${prefix}\\d+$`).test(name) && !renameBuffer[kind].includes(name)) {
+    renameBuffer[kind].push(name);
   }
 }
 
@@ -63,8 +110,67 @@ function showError(msg) {
   showError._t = setTimeout(() => errorBox.style.display = 'none', 3500);
 }
 
-function saveLocal() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(netData));
+function snapshot() {
+  // The reuse buffer is part of the editor state. Without saving it here,
+  // Ctrl+Z/redo and page reloads silently lose deleted automatic names.
+  return JSON.stringify({
+    net: netData,
+    renameBuffer: {
+      state: [...renameBuffer.state],
+      action: [...renameBuffer.action],
+      transition: [...renameBuffer.transition]
+    }
+  });
+}
+
+function saveLocal(recordHistory = true) {
+  const snap = snapshot();
+  localStorage.setItem(STORAGE_KEY, snap);
+  if (!recordHistory || restoringHistory) return;
+  if (historyIndex >= 0 && history[historyIndex] === snap) return;
+  history = history.slice(0, historyIndex + 1);
+  history.push(snap);
+  if (history.length > MAX_HISTORY) history.shift();
+  historyIndex = history.length - 1;
+}
+
+function restoreSnapshot(snap) {
+  restoringHistory = true;
+  const parsed = JSON.parse(snap);
+  if (parsed && parsed.net && parsed.net.states) {
+    netData = normalizeNet(parsed.net);
+    for (const kind of Object.keys(renameBuffer)) {
+      renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
+        ? parsed.renameBuffer[kind].map(String) : [];
+    }
+  } else {
+    // Backwards compatibility with snapshots from the previous static build.
+    netData = normalizeNet(parsed);
+    for (const kind of Object.keys(renameBuffer)) renameBuffer[kind] = [];
+  }
+  syncRenameBuffer();
+  localStorage.setItem(STORAGE_KEY, snapshot());
+  selected = null;
+  arcSource = null;
+  restoringHistory = false;
+  render();
+}
+
+function undo() {
+  if (historyIndex <= 0) return;
+  historyIndex--;
+  restoreSnapshot(history[historyIndex]);
+}
+
+function redo() {
+  if (historyIndex >= history.length - 1) return;
+  historyIndex++;
+  restoreSnapshot(history[historyIndex]);
+}
+
+function initHistory() {
+  history = [snapshot()];
+  historyIndex = 0;
 }
 
 function loadLocal() {
@@ -72,7 +178,17 @@ function loadLocal() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw);
-    netData = normalizeNet(parsed);
+    // Accept both the current wrapped format and older exports/localStorage.
+    if (parsed && parsed.net && parsed.net.states) {
+      netData = normalizeNet(parsed.net);
+      for (const kind of Object.keys(renameBuffer)) {
+        renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
+          ? parsed.renameBuffer[kind].map(String) : [];
+      }
+    } else {
+      netData = normalizeNet(parsed);
+    }
+    syncRenameBuffer();
   } catch (e) {
     showError('Saved net could not be loaded.');
   }
@@ -161,6 +277,7 @@ function validateUniqueNodeName(name, oldName = null) {
 
 function addState(name, description, x, y) {
   validateUniqueNodeName(name);
+  commitName('state', name);
   netData.states.push({
     name, description, ficha_count: 0, x, y,
     rotation: 0, label_dx: 0, label_dy: 46
@@ -170,6 +287,7 @@ function addState(name, description, x, y) {
 
 function addAction(name, description, x, y) {
   validateUniqueNodeName(name);
+  commitName('action', name);
   netData.actions.push({
     name, description, enum: netData.actions.length, x, y,
     rotation: 0, label_dx: 0, label_dy: 46
@@ -190,6 +308,9 @@ function addArc(name, description, source, target, weight, arc_type) {
   if (!['normal', 'inhibitor', 'read'].includes(arc_type)) arc_type = 'normal';
   if (sourceKind !== 'state') arc_type = 'normal';
   if (!Number.isInteger(weight) || weight < 1) throw new Error('Arc weight must be a positive integer.');
+  // Only consume/increment the name allocator after the operation is known
+  // to be valid. A failed arc creation must leave the suggestion untouched.
+  commitName('transition', name);
   netData.transitions.push({
     name, description, source, target, weight, arc_type,
     label_dx: 6, label_dy: -6
@@ -207,6 +328,9 @@ function renameNode(oldName, newName) {
   validateUniqueNodeName(newName, oldName);
   const node = findNode(oldName);
   if (!node) throw new Error(`No node named '${oldName}'.`);
+  // Renaming an automatically allocated node frees its old name for reuse,
+  // just like deleting it. A failed/duplicate rename reaches none of this.
+  rememberRemovedName(nodeKind(oldName), oldName);
   node.name = newName;
   for (const t of netData.transitions) {
     if (t.source === oldName) t.source = newName;
@@ -219,6 +343,11 @@ function renameNode(oldName, newName) {
 function removeNode(name) {
   const kind = nodeKind(name);
   if (!kind) throw new Error(`No node named '${name}'.`);
+  rememberRemovedName(kind, name);
+  // Deleting a node also deletes its arcs. Those arc names are reusable too.
+  for (const t of netData.transitions) {
+    if (t.source === name || t.target === name) rememberRemovedName('transition', t.name);
+  }
   netData.transitions = netData.transitions.filter(t => t.source !== name && t.target !== name);
   if (kind === 'state') netData.states = netData.states.filter(s => s.name !== name);
   else netData.actions = netData.actions.filter(a => a.name !== name);
@@ -230,6 +359,7 @@ function removeArc(name) {
   const before = netData.transitions.length;
   netData.transitions = netData.transitions.filter(t => t.name !== name);
   if (before === netData.transitions.length) throw new Error(`Arc '${name}' does not exist.`);
+  rememberRemovedName('transition', name);
   if (selected?.name === name) selected = null;
   saveLocal(); render();
 }
@@ -256,8 +386,16 @@ function fireAction(name) {
 
 function exportNet() {
   const out = JSON.parse(JSON.stringify(netData));
-  // Keep the JSON compatible with the Python model: counters are harmless extra metadata.
+  // Keep the Petri model fields compatible with Python and store editor-only
+  // state under a private metadata key. Python's from_dict simply ignores it.
   delete out.counters;
+  out._editor = {
+    renameBuffer: {
+      state: [...renameBuffer.state],
+      action: [...renameBuffer.action],
+      transition: [...renameBuffer.transition]
+    }
+  };
   const blob = new Blob([JSON.stringify(out, null, 2)], {type: 'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -268,7 +406,20 @@ function exportNet() {
 
 async function importNet(file) {
   const parsed = JSON.parse(await file.text());
-  netData = normalizeNet(parsed);
+  if (parsed && parsed.net && parsed.net.states) {
+    netData = normalizeNet(parsed.net);
+    for (const kind of Object.keys(renameBuffer)) {
+      renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
+        ? parsed.renameBuffer[kind].map(String) : [];
+    }
+  } else {
+    netData = normalizeNet(parsed);
+    for (const kind of Object.keys(renameBuffer)) {
+      renameBuffer[kind] = Array.isArray(parsed?._editor?.renameBuffer?.[kind])
+        ? parsed._editor.renameBuffer[kind].map(String) : [];
+    }
+  }
+  syncRenameBuffer();
   selected = null;
   saveLocal(); render();
 }
@@ -285,6 +436,66 @@ document.getElementById('theme-toggle').onclick = () => {
   localStorage.setItem('petri-theme', next);
   applyTheme(next);
 };
+
+
+
+document.getElementById('matrix-toggle').onclick = () => {
+  matrixOpen = !matrixOpen;
+  document.getElementById('matrix-panel').hidden = !matrixOpen;
+  if (matrixOpen) renderMatrices();
+};
+document.getElementById('matrix-incidence-tab').onclick = () => {
+  matrixView = 'incidence';
+  document.getElementById('matrix-incidence-tab').classList.add('active');
+  document.getElementById('matrix-output-tab').classList.remove('active');
+  renderMatrices();
+};
+document.getElementById('matrix-output-tab').onclick = () => {
+  matrixView = 'output';
+  document.getElementById('matrix-output-tab').classList.add('active');
+  document.getElementById('matrix-incidence-tab').classList.remove('active');
+  renderMatrices();
+};
+
+function renderMatrices() {
+  const content = document.getElementById('matrix-content');
+  if (!content) return;
+  const states = netData.states;
+  const arcs = netData.transitions;
+  if (matrixView === 'output') {
+    let html = '<div class="matrix-title">Output / Marking vector</div>';
+    if (!states.length) {
+      html += '<div class="matrix-empty">No states.</div>';
+    } else {
+      html += '<div class="matrix-scroll"><table class="matrix-table vector-table"><thead><tr><th>State</th><th>M</th></tr></thead><tbody>';
+      for (const state of states) html += `<tr><th>${escapeHtml(state.name)}</th><td>${state.ficha_count}</td></tr>`;
+      html += '</tbody></table></div>';
+    }
+    content.innerHTML = html;
+    return;
+  }
+
+  let html = '<div class="matrix-title">Incidence matrix</div>';
+  if (!states.length || !arcs.length) {
+    html += '<div class="matrix-empty">Add at least one State and one Arc to display the incidence matrix.</div>';
+  } else {
+    html += '<div class="matrix-scroll"><table class="matrix-table"><thead><tr><th>State</th>';
+    for (const t of arcs) html += `<th>${escapeHtml(t.name)}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const state of states) {
+      html += `<tr><th>${escapeHtml(state.name)}</th>`;
+      for (const t of arcs) {
+        let value = 0;
+        if (t.source === state.name) value = t.weight;
+        else if (t.target === state.name) value = -t.weight;
+        html += `<td class="${value > 0 ? 'positive' : value < 0 ? 'negative' : ''}">${value}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+  content.innerHTML = html;
+}
 
 function setMode(m) {
   mode = m; arcSource = null;
@@ -308,6 +519,7 @@ document.getElementById('btn-new').onclick = () => {
   const name = prompt('Name for the new net:', 'Untitled Net');
   if (name === null) return;
   netData = emptyNet(name || 'Untitled Net');
+  for (const kind of Object.keys(renameBuffer)) renameBuffer[kind] = [];
   selected = null; arcSource = null;
   saveLocal(); render();
 };
@@ -366,12 +578,12 @@ svg.addEventListener('click', e => {
 
   try {
     if (mode === 'state' && !hit) {
-      const name = prompt('Place name:', nextName('state'));
+      const name = prompt('Place name:', suggestName('state'));
       if (!name) return;
       const description = prompt('Description (optional):', '') || '';
       addState(name.trim(), description, pt.x, pt.y);
     } else if (mode === 'action' && !hit) {
-      const name = prompt('Transition (action) name:', nextName('action'));
+      const name = prompt('Transition (action) name:', suggestName('action'));
       if (!name) return;
       const description = prompt('Description (optional):', '') || '';
       addAction(name.trim(), description, pt.x, pt.y);
@@ -384,7 +596,7 @@ svg.addEventListener('click', e => {
       } else {
         const source = arcSource;
         const target = name;
-        const arcName = prompt('Arc name:', nextName('transition'));
+        const arcName = prompt('Arc name:', suggestName('transition'));
         if (!arcName) { arcSource = null; render(); return; }
         const weight = parseInt(prompt('Weight (tokens consumed/produced):', '1') || '1', 10) || 1;
         let arcType = 'normal';
@@ -409,9 +621,10 @@ svg.addEventListener('click', e => {
   }
 });
 
-nodesLayer.addEventListener('mousedown', e => {
+nodesLayer.addEventListener('pointerdown', e => {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
+  if (hit) hit.setPointerCapture?.(e.pointerId);
   if (!hit) return;
   dragMoved = false;
   if (e.target.dataset.role === 'label')
@@ -420,16 +633,18 @@ nodesLayer.addEventListener('mousedown', e => {
     dragging = hit.dataset.name;
 });
 
-arcsLayer.addEventListener('mousedown', e => {
+arcsLayer.addEventListener('pointerdown', e => {
   if (mode !== 'select' || e.target.dataset.role !== 'label') return;
+  e.preventDefault();
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
   dragMoved = false;
   draggingLabel = {kind: 'transition', name: hit.dataset.name};
 });
 
-svg.addEventListener('mousemove', e => {
+svg.addEventListener('pointermove', e => {
   if (!dragging && !draggingLabel) return;
+  e.preventDefault();
   dragMoved = true;
   const pt = svgPoint(e);
   if (dragging) {
@@ -441,8 +656,11 @@ svg.addEventListener('mousemove', e => {
       if (t) {
         const s = findNode(t.source), tg = findNode(t.target);
         if (s && tg) {
-          t.label_dx = pt.x - (s.x + tg.x)/2;
-          t.label_dy = pt.y - (s.y + tg.y)/2;
+          const geometry = arcGeometry(t);
+          const mx = geometry ? geometry.midX : (s.x + tg.x) / 2;
+          const my = geometry ? geometry.midY : (s.y + tg.y) / 2;
+          t.label_dx = pt.x - mx;
+          t.label_dy = pt.y - my;
           render();
         }
       }
@@ -457,7 +675,7 @@ svg.addEventListener('mousemove', e => {
   }
 });
 
-window.addEventListener('mouseup', () => {
+window.addEventListener('pointerup', () => {
   if (dragging || draggingLabel) {
     saveLocal();
     dragging = null;
@@ -570,6 +788,66 @@ function escapeHtml(value) {
 }
 function escapeAttr(value) { return escapeHtml(value); }
 
+// When two opposite arcs connect the same pair of units, draw them as two
+// parallel lines. The second arc therefore does not point through the same
+// centre/boundary point as the first one.
+function arcGeometry(t) {
+  const source = findNode(t.source), target = findNode(t.target);
+  const sourceKind = nodeKind(t.source), targetKind = nodeKind(t.target);
+  if (!source || !target) return null;
+
+  const reverse = netData.transitions.find(other =>
+    other !== t && other.source === t.target && other.target === t.source
+  );
+
+  // Keep the first direction straight. If the reverse direction exists,
+  // route it around the connection instead of sending both arrows through
+  // the same centre line. This also makes the arrowhead approach the side
+  // of the target unit rather than the same point as the first arrow.
+  const isFirst = !reverse ||
+    netData.transitions.indexOf(t) < netData.transitions.indexOf(reverse);
+
+  let dx = target.x - source.x, dy = target.y - source.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const nx = -dy / dist, ny = dx / dist;
+  const bend = reverse && !isFirst ? 42 : 0;
+
+  const aim1 = bend ? {
+    x: target.x + nx * bend,
+    y: target.y + ny * bend
+  } : {x: target.x, y: target.y};
+  const aim2 = bend ? {
+    x: source.x + nx * bend,
+    y: source.y + ny * bend
+  } : {x: source.x, y: source.y};
+
+  const p1 = boundaryPoint(source, sourceKind, aim1.x, aim1.y);
+  const p2 = boundaryPoint(target, targetKind, aim2.x, aim2.y);
+
+  if (!bend) {
+    return {
+      p1, p2,
+      path: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`,
+      midX: (p1.x + p2.x) / 2,
+      midY: (p1.y + p2.y) / 2
+    };
+  }
+
+  const control = {
+    x: (source.x + target.x) / 2 + nx * bend,
+    y: (source.y + target.y) / 2 + ny * bend
+  };
+  // Quadratic Bezier midpoint at t=0.5, used for the label anchor.
+  const midX = 0.25*p1.x + 0.5*control.x + 0.25*p2.x;
+  const midY = 0.25*p1.y + 0.5*control.y + 0.25*p2.y;
+
+  return {
+    p1, p2, control,
+    path: `M ${p1.x} ${p1.y} Q ${control.x} ${control.y} ${p2.x} ${p2.y}`,
+    midX, midY
+  };
+}
+
 function render() {
   if (!netData) return;
   document.getElementById('netname').value = netData.name;
@@ -579,17 +857,16 @@ function render() {
   for (const t of netData.transitions) {
     const s = findNode(t.source), tg = findNode(t.target);
     if (!s || !tg) continue;
-    const sKind = nodeKind(t.source), tKind = nodeKind(t.target);
-    const p1 = boundaryPoint(s, sKind, tg.x, tg.y);
-    const p2 = boundaryPoint(tg, tKind, s.x, s.y);
+    const geometry = arcGeometry(t);
+    if (!geometry) continue;
+    const { p1, p2, midX, midY } = geometry;
 
     const g = document.createElementNS(svg.namespaceURI, 'g');
     g.classList.add('arc');
     g.dataset.name = t.name; g.dataset.kind = 'transition';
 
-    const line = document.createElementNS(svg.namespaceURI, 'line');
-    line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
-    line.setAttribute('x2', p2.x); line.setAttribute('y2', p2.y);
+    const line = document.createElementNS(svg.namespaceURI, 'path');
+    line.setAttribute('d', geometry.path);
     line.setAttribute('class', 'type-' + t.arc_type +
       (selected?.kind === 'transition' && selected.name === t.name ? ' selected' : ''));
     line.dataset.name = t.name; line.dataset.kind = 'transition';
@@ -599,8 +876,8 @@ function render() {
     g.appendChild(line);
 
     const label = document.createElementNS(svg.namespaceURI, 'text');
-    label.setAttribute('x', (s.x+tg.x)/2 + (t.label_dx ?? 6));
-    label.setAttribute('y', (s.y+tg.y)/2 + (t.label_dy ?? -6));
+    label.setAttribute('x', midX + (t.label_dx ?? 6));
+    label.setAttribute('y', midY + (t.label_dy ?? -6));
     label.setAttribute('class', 'arc-label');
     label.dataset.name = t.name; label.dataset.kind = 'transition'; label.dataset.role = 'label';
     label.textContent = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
@@ -650,7 +927,139 @@ function render() {
   }
 
   renderInspector();
+  if (matrixOpen) renderMatrices();
 }
 
 loadLocal();
 render();
+initHistory();
+
+
+// Help dialog
+const helpModal = document.getElementById('help-modal');
+const helpUsageTab = document.getElementById('help-usage-tab');
+const helpShortcutsTab = document.getElementById('help-shortcuts-tab');
+const helpUsage = document.getElementById('help-usage');
+const helpShortcuts = document.getElementById('help-shortcuts');
+
+function setHelpPage(page) {
+  const usage = page === 'usage';
+  helpUsage.hidden = !usage;
+  helpShortcuts.hidden = usage;
+  helpUsageTab.classList.toggle('active', usage);
+  helpShortcutsTab.classList.toggle('active', !usage);
+}
+function openHelp(page = 'usage') {
+  helpModal.hidden = false;
+  setHelpPage(page);
+  document.getElementById('help-close').focus();
+}
+function closeHelp() { helpModal.hidden = true; }
+
+document.getElementById('help-toggle').onclick = () => openHelp();
+document.getElementById('help-close').onclick = closeHelp;
+document.getElementById('help-backdrop').onclick = closeHelp;
+helpUsageTab.onclick = () => setHelpPage('usage');
+helpShortcutsTab.onclick = () => setHelpPage('shortcuts');
+
+function isTypingTarget(target) {
+  return target instanceof HTMLInputElement ||
+         target instanceof HTMLTextAreaElement ||
+         target instanceof HTMLSelectElement ||
+         target.isContentEditable;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (!helpModal.hidden) { closeHelp(); return; }
+    selected = null;
+    arcSource = null;
+    setMode('select');
+    render();
+    return;
+  }
+
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod) {
+    const key = e.key.toLowerCase();
+
+    if (key === 'z') {
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      e.shiftKey ? redo() : undo();
+      return;
+    }
+    if (key === 'y') {
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      redo();
+      return;
+    }
+    if (key === 's') {
+      e.preventDefault();
+      exportNet();
+      return;
+    }
+    if (key === 'o') {
+      e.preventDefault();
+      document.getElementById('file-input').click();
+      return;
+    }
+    if (key === 'm') {
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      document.getElementById('matrix-toggle').click();
+      return;
+    }
+    if (key === 'd') {
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      document.getElementById('theme-toggle').click();
+      return;
+    }
+    if (key === '/') {
+      e.preventDefault();
+      openHelp('shortcuts');
+      return;
+    }
+  }
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (isTypingTarget(e.target)) return;
+    if (selected) {
+      e.preventDefault();
+      try {
+        if (selected.kind === 'transition') removeArc(selected.name);
+        else removeNode(selected.name);
+      } catch (err) { showError(err.message); }
+    }
+    return;
+  }
+
+  if (e.code === 'Space') {
+    if (isTypingTarget(e.target)) return;
+    if (selected?.kind === 'action') {
+      e.preventDefault();
+      try { fireAction(selected.name); }
+      catch (err) { showError(err.message); }
+    }
+  }
+});
+
+// Canvas zoom controls
+function applyZoom() {
+  svg.style.transformOrigin = '0 0';
+  svg.style.transform = `scale(${svgZoom})`;
+}
+document.getElementById('zoom-in').onclick = () => {
+  svgZoom = Math.min(2, +(svgZoom + 0.1).toFixed(2));
+  applyZoom();
+};
+document.getElementById('zoom-out').onclick = () => {
+  svgZoom = Math.max(0.5, +(svgZoom - 0.1).toFixed(2));
+  applyZoom();
+};
+document.getElementById('zoom-reset').onclick = () => {
+  svgZoom = 1;
+  applyZoom();
+};
