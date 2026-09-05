@@ -122,6 +122,26 @@ class PETRI:
         self._next_state_seq = 0
         self._next_action_seq = 0
         self._next_transition_seq = 0
+        # handle removed naming
+        self._removed_state_names = set()
+        self._removed_action_names = set()
+        self._removed_transition_names = set()
+        # Ctrl Z
+        self._history = []
+        self._history_matrix = []
+
+    # ---- saving steps -------------------------------------------------- #
+    @classmethod
+    def _save_step(cls, petri_net: 'PETRI'):
+        """Save the current state of the Petri net to the history stack."""
+        snapshot = petri_net.to_dict()
+        petri_net._history.append(snapshot)
+
+    @classmethod
+    def _save_step_matrix(cls, petri_net: 'PETRI'):
+        """Save the current state of the Petri net to the history stack."""
+        snapshot = [petri_net.incidence_matrix,petri_net.output_matrix]
+        petri_net._history_matrix.append(snapshot)
 
     # ---- simulation hook (unused for now, kept for future work) -------- #
     def add_simulation(self, simulation: 'Simulation'):
@@ -176,6 +196,8 @@ class PETRI:
             raise NotFoundError(f"State '{old_name}' does not exist.")
         if new_name != old_name and self._name_taken(new_name):
             raise DuplicateNameError(f"'{new_name}' is already in use.")
+        if len(old_name) > 1 and old_name[0] == 'p' and old_name[1:].isdigit():
+            self._removed_state_names.add(old_name)
         state = self.states.pop(old_name)
         state.name = new_name          # arcs hold a reference to this object,
         self.states[new_name] = state  # so they pick up the new name for free
@@ -186,10 +208,24 @@ class PETRI:
             raise NotFoundError(f"Action '{old_name}' does not exist.")
         if new_name != old_name and self._name_taken(new_name):
             raise DuplicateNameError(f"'{new_name}' is already in use.")
+        if len(old_name) > 1 and old_name[0] == 't' and old_name[1:].isdigit():
+            self._removed_action_names.add(old_name)
         action = self.actions.pop(old_name)
         action.name = new_name
         self.actions[new_name] = action
         return action
+
+    def rename_transition(self, old_name: str, new_name: str):
+            if old_name not in self.transitions:
+                raise NotFoundError(f"Transition '{old_name}' does not exist.")
+            if new_name != old_name and self._name_taken(new_name):
+                raise DuplicateNameError(f"'{new_name}' is already in use.")
+            if len(old_name) > 1 and old_name[0] == 'a' and old_name[1:].isdigit():
+                self._removed_transition_names.add(old_name)
+            transition = self.transitions.pop(old_name)
+            transition.name = new_name
+            self.transitions[new_name] = transition
+            return transition
 
     # ---- states (places) ------------------------------------------------#
     def add_state(self, state: 'State'):
@@ -206,6 +242,8 @@ class PETRI:
     def remove_state(self, name: str):
         if name not in self.states:
             raise NotFoundError(f"State '{name}' does not exist.")
+        if len(name) > 1 and name[0] == 'p' and name[1:].isdigit():
+            self._removed_state_names.add(name)
         for t_name in [t.name for t in self.transitions.values()
                         if t.source.name == name or t.target.name == name]:
             del self.transitions[t_name]
@@ -233,10 +271,6 @@ class PETRI:
             raise ValueError("Token count cannot be negative.")
         self.states[place_name].ficha_count = count
 
-    @classmethod
-    def sort_states(self):
-        pass
-
     # ---- actions (transitions) ------------------------------------------#
     def add_action(self, action: 'Action'):
         if action.name in self.actions:
@@ -252,6 +286,8 @@ class PETRI:
     def remove_action(self, name: str):
         if name not in self.actions:
             raise NotFoundError(f"Action '{name}' does not exist.")
+        if len(name) > 1 and name[0] == 'a' and name[1:].isdigit():
+            self._removed_action_names.add(name)
         for t_name in [t.name for t in self.transitions.values()
                         if t.source.name == name or t.target.name == name]:
             del self.transitions[t_name]
@@ -294,6 +330,8 @@ class PETRI:
     def remove_transition(self, name: str):
         if name not in self.transitions:
             raise NotFoundError(f"Transition (arc) '{name}' does not exist.")
+        if len(name) > 1 and name[0] == 't' and name[1:].isdigit():
+            self._removed_transition_names.add(name)
         del self.transitions[name]
 
     # ---- matrix -----------------------------------------------------------

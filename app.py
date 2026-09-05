@@ -218,11 +218,11 @@ def rename_node(name):
 @app.route("/api/autoname/<kind>", methods=["GET"])
 def autoname(kind):
     if kind == "state":
-        return jsonify({"name": net.next_state_name()})
+        return jsonify({"name": net._removed_state_names.pop() if net._removed_state_names else net.next_state_name()})
     if kind == "action":
-        return jsonify({"name": net.next_action_name()})
+        return jsonify({"name": net._removed_action_names.pop() if net._removed_action_names else net.next_action_name()})
     if kind == "transition":
-        return jsonify({"name": net.next_transition_name()})
+        return jsonify({"name": net._removed_transition_names.pop() if net._removed_transition_names else net.next_transition_name()})
     return err(f"Unknown kind '{kind}'.", 404)
 
 
