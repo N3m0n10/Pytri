@@ -336,7 +336,16 @@ class PETRI:
         # after fitings and entity added/removed/alterated. 
 
     def calc_state_by_matrix(self, transitions_fired:list):
-        pass
+        count_f = {f: transitions_fired.count(f) for f in set(transitions_fired)}
+        counted_t = [count_f.get(t.name, 0) for t in self.transitions]
+        size_rows = len(self.states)
+        size_cols = len(self.transitions)
+        rows = [self.incidence_matrix[i * size_cols:(i + 1) * size_cols] for i in range(size_rows)]
+        delta = [sum(row[i] * counted_t[i] for i in range(len(counted_t)))
+            for row in rows]
+
+        # 4. Add the result to the initial output/marking array
+        return [out + change for out, change in zip(self.output_matrix, delta)]
 
     def pre_arcs(self, action_name: str):
         """Input arcs (State -> Action) feeding a given action."""
