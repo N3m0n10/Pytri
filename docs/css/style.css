@@ -150,30 +150,43 @@ svg {
   max-width: 60%;
 }
 
-/* Matrix inspector */
-#matrix-panel {
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* Matrix dialog */
+#matrix-modal[hidden] { display: none; }
+#matrix-modal { position: fixed; inset: 0; z-index: 100; }
+#matrix-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(2px);
 }
-#matrix-panel[hidden] { display: none; }
-.matrix-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-.matrix-tabs button { padding: 6px 7px; font-size: 12px; }
-.matrix-title { font-size: 12px; font-weight: 700; }
-.matrix-help { color: var(--muted); font-size: 10.5px; line-height: 1.4; }
-.matrix-scroll { overflow: auto; max-height: 240px; border: 1px solid var(--line); border-radius: 5px; }
-.matrix-table { border-collapse: collapse; width: max-content; min-width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
-.matrix-table th, .matrix-table td { padding: 5px 7px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+#matrix-dialog {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(900px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.22);
+  padding: 22px;
+}
+#matrix-dialog > h2 { margin: 0 0 14px; font-size: 20px; }
+#matrix-dialog .matrix-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+#matrix-dialog .matrix-tabs button { text-align: center; }
+.matrix-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.matrix-help { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 12px; }
+.matrix-scroll { overflow: auto; max-height: 55vh; border: 1px solid var(--line); border-radius: 5px; }
+.matrix-table { border-collapse: collapse; width: max-content; min-width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.matrix-table th, .matrix-table td { padding: 6px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
 .matrix-table th { background: var(--surface); position: sticky; top: 0; z-index: 1; }
 .matrix-table tbody th { left: 0; position: sticky; z-index: 2; }
-.matrix-table td.positive { font-weight: 700; }
-.matrix-table td.negative { font-weight: 700; }
-.matrix-empty { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.matrix-table td.positive, .matrix-table td.negative { font-weight: 700; }
+.matrix-empty { color: var(--muted); font-size: 12px; line-height: 1.4; padding: 10px 0; }
 
 /* Touch-friendly interaction */
-#canvas-wrap, svg, [data-name] { touch-action: none; }
+#canvas-wrap { touch-action: none; }
+svg, [data-name] { touch-action: none; }
 button, input, textarea, select { touch-action: manipulation; }
 
 
@@ -317,7 +330,8 @@ kbd {
 }
 
 /* Touch */
-#canvas-wrap, svg, [data-name] { touch-action: none; }
+#canvas-wrap { touch-action: none; }
+svg, [data-name] { touch-action: none; }
 button, input, textarea, select { touch-action: manipulation; }
 
 /* Mobile */
@@ -337,16 +351,16 @@ button, input, textarea, select { touch-action: manipulation; }
     padding: 9px; gap: 9px; overflow-y: auto;
   }
   /* The menu must remain natively vertically scrollable on touch. */
-  #sidebar { touch-action: pan-y; overscroll-behavior: contain; }
+  #sidebar { touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   #canvas-wrap { touch-action: none; }
 
   .mobile-sidebar-head { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .group { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 5px; }
   .group h2 { grid-column: 1 / -1; }
   .group button { min-height: 39px; font-size: 12px; }
-  #matrix-panel { max-height: 25dvh; overflow: hidden; }
-  #matrix-panel .matrix-help, #hint { display: none; }
-  .matrix-scroll { max-height: 120px; }
+  #hint { display: none; }
+  #matrix-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 16px; }
+  .matrix-scroll { max-height: 55dvh; }
   #inspector { max-height: 23dvh; overflow-y: auto; padding-top: 8px; }
   #canvas-wrap { width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; overflow: auto; -webkit-overflow-scrolling: touch; }
   #canvas-toolbar { position: sticky; top: 8px; margin: 8px; }
@@ -366,4 +380,5 @@ button, input, textarea, select { touch-action: manipulation; }
   .group button { font-size: 11px; padding: 7px 6px; }
   #inspector { font-size: 12px; }
   .matrix-table { font-size: 10px; }
+  #matrix-dialog .matrix-tabs button { min-height: 40px; }
 }

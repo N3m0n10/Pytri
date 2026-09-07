@@ -366,24 +366,24 @@ class PETRI:
     # action's preconditions hold, and what firing it does to the marking.
     # This is what a simulation loop will call into.
 
-    def update_state_output_matrix(self):
-        for i , state in self.states.values():
-            state.ficha_count = self.output_matrix[i] 
-        # NOTE: since dict maintain insertion order, the order of states in self.states.values()
-        # is consistent with the order of the output matrix. If the matrix is properly updated 
-        # after fitings and entity added/removed/alterated. 
-
     def calc_state_by_matrix(self, transitions_fired:list):
-        count_f = {f: transitions_fired.count(f) for f in set(transitions_fired)}
-        counted_t = [count_f.get(t.name, 0) for t in self.transitions]
+        count_f = {f: transitions_fired.count(f) for f in set(transitions_fired)} # dict with trans_name: count_fired
+        counted_t = [count_f.get(t.name, 0) for t in self.transitions] # same, but adding the ones with zeros 
         size_rows = len(self.states)
         size_cols = len(self.transitions)
         rows = [self.incidence_matrix[i * size_cols:(i + 1) * size_cols] for i in range(size_rows)]
+        # Matrix multiplication: delta = C * counted_t, where C is the incidence matrix and counted_t is the vector of transition firings
         delta = [sum(row[i] * counted_t[i] for i in range(len(counted_t)))
             for row in rows]
 
         # 4. Add the result to the initial output/marking array
         return [out + change for out, change in zip(self.output_matrix, delta)]
+
+    def get_state_by_matrix(self, transitions_fired:list):
+        new_state = self.calc_state_by_matrix(transitions_fired)
+        for i, state in enumerate(self.states.values()):
+            state.ficha_count = new_state[i]
+        return new_state
 
     def pre_arcs(self, action_name: str):
         """Input arcs (State -> Action) feeding a given action."""
