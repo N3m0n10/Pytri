@@ -709,8 +709,8 @@ function startDragNode(e) {
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
 
-  e.stopPropagation();
-  e.preventDefault();
+  // Select entity immediately so the inspector opens with rename, delete, tokens, etc.
+  selectNode(hit.dataset.kind, hit.dataset.name);
 
   dragMoved = false;
   const isLabel = e.target.dataset.role === 'label';
@@ -830,7 +830,10 @@ function renderInspector() {
     if (!t) { selected = null; inspector.hidden = true; return; }
     const canChooseType = nodeKind(t.source) === 'state';
     inspector.innerHTML = `
-      <h2>Arc: ${escapeHtml(t.name)}</h2>
+      <div class="inspector-header">
+        <h2>Arc: ${escapeHtml(t.name)}</h2>
+        <button id="insp-close" class="insp-close-btn" title="Close inspector">✕</button>
+      </div>
       <div class="muted">${escapeHtml(t.source)} &rarr; ${escapeHtml(t.target)}
         (${canChooseType ? 'pre' : 'post'})</div>
       <div class="row"><label>Weight</label>
@@ -854,6 +857,7 @@ function renderInspector() {
         saveLocal(); render();
       } catch (err) { showError(err.message); }
     };
+    document.getElementById('insp-close').onclick = () => { selected = null; render(); };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
     document.getElementById('insp-delete').onclick = () => removeArc(t.name);
@@ -864,8 +868,11 @@ function renderInspector() {
   if (!node) { selected = null; inspector.hidden = true; return; }
   const isState = selected.kind === 'state';
   inspector.innerHTML = `
-    <h2>${isState ? 'Place' : 'Action'}: ${escapeHtml(node.name)}
-      ${!isState && isEnabled(node.name) ? '<span style="color:var(--enabled)">(enabled)</span>' : ''}</h2>
+    <div class="inspector-header">
+      <h2>${isState ? 'Place' : 'Action'}: ${escapeHtml(node.name)}
+        ${!isState && isEnabled(node.name) ? '<span style="color:var(--enabled)">(enabled)</span>' : ''}</h2>
+      <button id="insp-close" class="insp-close-btn" title="Close inspector">✕</button>
+    </div>
     <div class="row"><label>Name</label>
       <input id="insp-name" value="${escapeAttr(node.name)}">
       <button id="insp-rename">Rename</button></div>
@@ -876,6 +883,8 @@ function renderInspector() {
       `<div class="row"><button id="insp-rotate">⟳ Rotate 90°</button>
         <button id="insp-fire" ${isEnabled(node.name) ? '' : 'disabled'}>▶ Fire</button></div>`}
     <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'action'}</button>`;
+
+  document.getElementById('insp-close').onclick = () => { selected = null; render(); };
 
   document.getElementById('insp-desc').onchange = e => {
     node.description = e.target.value;
