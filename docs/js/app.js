@@ -21,6 +21,7 @@ let panning = null;
 let dragMoved = false;
 let matrixView = 'incidence';
 let matrixOpen = false;
+let mobileInspectorOpen = false;
 
 const MAX_HISTORY = 80;
 let history = [];
@@ -638,7 +639,9 @@ svg.addEventListener('click', e => {
     } else if (mode === 'select' && hit) {
       selectNode(hit.dataset.kind, hit.dataset.name);
     } else if (mode === 'select' && !hit) {
-      selected = null; render();
+      selected = null;
+      mobileInspectorOpen = false;
+      render();
     }
   } catch (err) {
     showError(err.message);
@@ -814,20 +817,39 @@ sidebar.addEventListener('wheel', e => {
 
 function selectNode(kind, name) {
   selected = {kind, name};
+  mobileInspectorOpen = false;
   render();
 }
 
 function renderInspector() {
+  const optionsBtn = document.getElementById('entity-options-btn') || document.getElementById('mobile-options-btn');
+  const nameSpan = document.getElementById('selected-entity-name') || document.getElementById('mobile-selected-name');
+
   if (!selected) {
     inspector.hidden = true;
+    inspector.classList.remove('open-mobile');
+    if (optionsBtn) optionsBtn.hidden = true;
     return;
   }
+
   inspector.hidden = false;
+  
+  if (optionsBtn && nameSpan) {
+    nameSpan.textContent = selected.name;
+    optionsBtn.hidden = false;
+  }
+
+  if (mobileInspectorOpen) {
+    inspector.classList.add('open-mobile');
+  } else {
+    inspector.classList.remove('open-mobile');
+  }
+
   inspector.innerHTML = '';
 
   if (selected.kind === 'transition') {
     const t = netData.transitions.find(t => t.name === selected.name);
-    if (!t) { selected = null; inspector.hidden = true; return; }
+    if (!t) { selected = null; inspector.hidden = true; if (mobileBtn) mobileBtn.hidden = true; return; }
     const canChooseType = nodeKind(t.source) === 'state';
     inspector.innerHTML = `
       <div class="inspector-header">
@@ -857,7 +879,7 @@ function renderInspector() {
         saveLocal(); render();
       } catch (err) { showError(err.message); }
     };
-    document.getElementById('insp-close').onclick = () => { selected = null; render(); };
+    document.getElementById('insp-close').onclick = () => { mobileInspectorOpen = false; renderInspector(); };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
     document.getElementById('insp-delete').onclick = () => removeArc(t.name);
@@ -865,7 +887,7 @@ function renderInspector() {
   }
 
   const node = findNode(selected.name);
-  if (!node) { selected = null; inspector.hidden = true; return; }
+  if (!node) { selected = null; inspector.hidden = true; if (mobileBtn) mobileBtn.hidden = true; return; }
   const isState = selected.kind === 'state';
   inspector.innerHTML = `
     <div class="inspector-header">
@@ -884,7 +906,7 @@ function renderInspector() {
         <button id="insp-fire" ${isEnabled(node.name) ? '' : 'disabled'}>▶ Fire</button></div>`}
     <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'action'}</button>`;
 
-  document.getElementById('insp-close').onclick = () => { selected = null; render(); };
+  document.getElementById('insp-close').onclick = () => { mobileInspectorOpen = false; renderInspector(); };
 
   document.getElementById('insp-desc').onchange = e => {
     node.description = e.target.value;
@@ -1361,6 +1383,16 @@ if (canvasWrap) {
       lastTapTime = now;
     }
   }, { passive: true });
+}
+
+// 4. Floating Entity Options Button Trigger
+const optionsBtn = document.getElementById('entity-options-btn') || document.getElementById('mobile-options-btn');
+if (optionsBtn) {
+  optionsBtn.onclick = (e) => {
+    e.preventDefault();
+    mobileInspectorOpen = true;
+    renderInspector();
+  };
 }
 
 // Initial zoom setup

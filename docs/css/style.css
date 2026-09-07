@@ -156,7 +156,7 @@ svg {
     var(--paper);
 }
 .state circle { fill: var(--state-fill); stroke: var(--ink); stroke-width: 1.6; }
-.state circle.selected { stroke: var(--accent); stroke-width: 2.6; }
+.state circle.selected { stroke: var(--accent); stroke-width: 3.5px; filter: drop-shadow(0 0 6px var(--accent)); }
 .node-label { font-size: 12px; fill: var(--ink); cursor: move; user-select: none; }
 .state text.tokens {
   font-size: 13px;
@@ -165,14 +165,14 @@ svg {
   pointer-events: none;
 }
 .action rect { fill: var(--action-fill); }
-.action rect.selected { stroke: var(--accent); stroke-width: 3px; }
+.action rect.selected { stroke: var(--accent); stroke-width: 3.5px; filter: drop-shadow(0 0 6px var(--accent)); }
 .action rect.enabled { fill: var(--enabled); }
 .arc-marker { fill: var(--arc); stroke: var(--arc); }
 .arc path { fill: none; stroke: var(--arc); stroke-width: 1.6; cursor: pointer; }
 .arc path.type-normal, .arc path.type-read { marker-end: url(#arrow); }
 .arc path.type-inhibitor { marker-end: url(#inhibitor-head); }
 .arc path.type-read { stroke-dasharray: 5 4; }
-.arc path.selected { stroke: var(--accent); stroke-width: 2.4; }
+.arc path.selected { stroke: var(--accent); stroke-width: 2.8px; filter: drop-shadow(0 0 5px var(--accent)); }
 .arc-label { font-size: 11px; fill: var(--arc); cursor: move; user-select: none; }
 .arc line.pending { stroke-dasharray: 4 3; }
 #error {
@@ -444,7 +444,11 @@ button, input, textarea, select { touch-action: manipulation; }
   .matrix-scroll { max-height: 55dvh; }
   
   /* Floating mobile bottom sheet for entity inspector options */
-  #inspector:not([hidden]) {
+  #inspector:not(.open-mobile) {
+    display: none !important;
+  }
+  #inspector.open-mobile:not([hidden]) {
+    display: flex !important;
     position: fixed;
     bottom: 0;
     left: 0;
@@ -453,7 +457,7 @@ button, input, textarea, select { touch-action: manipulation; }
     background: var(--surface);
     border-top: 2px solid var(--accent);
     border-radius: 16px 16px 0 0;
-    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.28);
     padding: 14px 16px 20px 16px;
     max-height: 55dvh;
     overflow-y: auto;
@@ -491,6 +495,48 @@ button, input, textarea, select { touch-action: manipulation; }
   }
   #help-title { font-size: 20px; }
   .help-columns { grid-template-columns: 1fr; gap: 0; }
+}
+
+.entity-options-btn[hidden] {
+  display: none !important;
+}
+
+.entity-options-btn:not([hidden]) {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 30px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  animation: popInBtn 0.22s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.entity-options-btn:hover {
+  transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.entity-options-btn:active {
+  transform: translateX(-50%) scale(0.95);
+}
+
+@keyframes popInBtn {
+  from { transform: translateX(-50%) scale(0.7); opacity: 0; }
+  to { transform: translateX(-50%) scale(1); opacity: 1; }
 }
 
 @keyframes slideUpSheet {
