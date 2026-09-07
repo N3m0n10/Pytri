@@ -5,6 +5,7 @@
 
 const svg = document.getElementById('svg');
 const arcsLayer = document.getElementById('arcs-layer');
+const guidesLayer = document.getElementById('guides-layer');
 const nodesLayer = document.getElementById('nodes-layer');
 const hint = document.getElementById('hint');
 const errorBox = document.getElementById('error');
@@ -731,6 +732,173 @@ function startDragNode(e) {
 nodesLayer.addEventListener('pointerdown', startDragNode);
 arcsLayer.addEventListener('pointerdown', startDragNode);
 
+// Auto-alignment & distance helpers ---------------------------------------
+function calculateAlignmentGuides(currentNode, targetX, targetY) {
+  const SNAP_THRESHOLD = 7;
+  let snappedX = targetX;
+  let snappedY = targetY;
+  const guides = [];
+
+  const allNodes = [...netData.states, ...netData.actions].filter(n => n.name !== currentNode.name);
+  if (!allNodes.length) return { snappedX, snappedY, guides };
+
+  let snapXFound = false;
+  let snapYFound = false;
+
+  // 1. Check Center Alignment (X & Y axis alignment)
+  for (const other of allNodes) {
+    if (!snapXFound && Math.abs(targetX - other.x) < SNAP_THRESHOLD) {
+      snappedX = other.x;
+      snapXFound = true;
+      guides.push({
+        type: 'v-line',
+        x: other.x,
+        minY: Math.min(targetY, other.y) - 25,
+        maxY: Math.max(targetY, other.y) + 25
+      });
+    }
+    if (!snapYFound && Math.abs(targetY - other.y) < SNAP_THRESHOLD) {
+      snappedY = other.y;
+      snapYFound = true;
+      guides.push({
+        type: 'h-line',
+        y: other.y,
+        minX: Math.min(targetX, other.x) - 25,
+        maxX: Math.max(targetX, other.x) + 25
+      });
+    }
+  }
+
+  // 2. Check Equal Spacing Alignment (horizontal & vertical distance matching)
+  if (allNodes.length >= 2) {
+    const sortedX = [...allNodes].sort((a, b) => a.x - b.x);
+    for (let i = 0; i < sortedX.length - 1; i++) {
+      const n1 = sortedX[i];
+      const n2 = sortedX[i + 1];
+      const dist = Math.abs(n2.x - n1.x);
+      if (dist < 35) continue;
+
+      if (!snapXFound && Math.abs(targetX - (n2.x + dist)) < SNAP_THRESHOLD) {
+        snappedX = n2.x + dist;
+        snapXFound = true;
+        guides.push({
+          type: 'h-spacing',
+          x1: n1.x, x2: n2.x, x3: snappedX,
+          y: (n1.y + n2.y + targetY) / 3,
+          dist: Math.round(dist)
+        });
+      }
+      if (!snapXFound && Math.abs(targetX - (n1.x - dist)) < SNAP_THRESHOLD) {
+        snappedX = n1.x - dist;
+        snapXFound = true;
+        guides.push({
+          type: 'h-spacing',
+          x1: snappedX, x2: n1.x, x3: n2.x,
+          y: (n1.y + n2.y + targetY) / 3,
+          dist: Math.round(dist)
+        });
+      }
+    }
+
+    const sortedY = [...allNodes].sort((a, b) => a.y - b.y);
+    for (let i = 0; i < sortedY.length - 1; i++) {
+      const n1 = sortedY[i];
+      const n2 = sortedY[i + 1];
+      const dist = Math.abs(n2.y - n1.y);
+      if (dist < 35) continue;
+
+      if (!snapYFound && Math.abs(targetY - (n2.y + dist)) < SNAP_THRESHOLD) {
+        snappedY = n2.y + dist;
+        snapYFound = true;
+        guides.push({
+          type: 'v-spacing',
+          y1: n1.y, y2: n2.y, y3: snappedY,
+          x: (n1.x + n2.x + targetX) / 3,
+          dist: Math.round(dist)
+        });
+      }
+      if (!snapYFound && Math.abs(targetY - (n1.y - dist)) < SNAP_THRESHOLD) {
+        snappedY = n1.y - dist;
+        snapYFound = true;
+        guides.push({
+          type: 'v-spacing',
+          y1: snappedY, y2: n1.y, y3: n2.y,
+          x: (n1.x + n2.x + targetX) / 3,
+          dist: Math.round(dist)
+        });
+      }
+    }
+  }
+
+  return { snappedX, snappedY, guides };
+}
+
+function renderGuides(guides) {
+  if (!guidesLayer) return;
+  guidesLayer.innerHTML = '';
+  if (!guides || !guides.length) return;
+
+  for (const g of guides) {
+    if (g.type === 'v-line') {
+      const line = document.createElementNS(svg.namespaceURI, 'line');
+      line.setAttribute('class', 'align-guide');
+      line.setAttribute('x1', g.x); line.setAttribute('y1', g.minY);
+      line.setAttribute('x2', g.x); line.setAttribute('y2', g.maxY);
+      guidesLayer.appendChild(line);
+    } else if (g.type === 'h-line') {
+      const line = document.createElementNS(svg.namespaceURI, 'line');
+      line.setAttribute('class', 'align-guide');
+      line.setAttribute('x1', g.minX); line.setAttribute('y1', g.y);
+      line.setAttribute('x2', g.maxX); line.setAttribute('y2', g.y);
+      guidesLayer.appendChild(line);
+    } else if (g.type === 'h-spacing') {
+      const l1 = document.createElementNS(svg.namespaceURI, 'line');
+      l1.setAttribute('class', 'spacing-guide');
+      l1.setAttribute('x1', g.x1); l1.setAttribute('y1', g.y);
+      l1.setAttribute('x2', g.x2); l1.setAttribute('y2', g.y);
+      guidesLayer.appendChild(l1);
+
+      const l2 = document.createElementNS(svg.namespaceURI, 'line');
+      l2.setAttribute('class', 'spacing-guide');
+      l2.setAttribute('x1', g.x2); l2.setAttribute('y1', g.y);
+      l2.setAttribute('x2', g.x3); l2.setAttribute('y2', g.y);
+      guidesLayer.appendChild(l2);
+
+      const text = document.createElementNS(svg.namespaceURI, 'text');
+      text.setAttribute('class', 'guide-text');
+      text.setAttribute('x', (g.x1 + g.x3) / 2);
+      text.setAttribute('y', g.y - 6);
+      text.setAttribute('text-anchor', 'middle');
+      text.textContent = `dx: ${g.dist}px`;
+      guidesLayer.appendChild(text);
+    } else if (g.type === 'v-spacing') {
+      const l1 = document.createElementNS(svg.namespaceURI, 'line');
+      l1.setAttribute('class', 'spacing-guide');
+      l1.setAttribute('x1', g.x); l1.setAttribute('y1', g.y1);
+      l1.setAttribute('x2', g.x); l1.setAttribute('y2', g.y2);
+      guidesLayer.appendChild(l1);
+
+      const l2 = document.createElementNS(svg.namespaceURI, 'line');
+      l2.setAttribute('class', 'spacing-guide');
+      l2.setAttribute('x1', g.x); l2.setAttribute('y1', g.y2);
+      l2.setAttribute('x2', g.x); l2.setAttribute('y2', g.y3);
+      guidesLayer.appendChild(l2);
+
+      const text = document.createElementNS(svg.namespaceURI, 'text');
+      text.setAttribute('class', 'guide-text');
+      text.setAttribute('x', g.x + 8);
+      text.setAttribute('y', (g.y1 + g.y3) / 2);
+      text.setAttribute('text-anchor', 'start');
+      text.textContent = `dy: ${g.dist}px`;
+      guidesLayer.appendChild(text);
+    }
+  }
+}
+
+function clearGuides() {
+  if (guidesLayer) guidesLayer.innerHTML = '';
+}
+
 svg.addEventListener('pointermove', e => {
   if (panning) return;
   const pt = svgPoint(e);
@@ -752,9 +920,11 @@ svg.addEventListener('pointermove', e => {
   if (dragging) {
     const node = findNode(dragging);
     if (node) {
-      node.x = Math.max(30, Math.min(BASE_WIDTH - 30, pt.x));
-      node.y = Math.max(30, Math.min(BASE_HEIGHT - 30, pt.y));
+      const snapResult = calculateAlignmentGuides(node, pt.x, pt.y);
+      node.x = Math.max(30, Math.min(BASE_WIDTH - 30, snapResult.snappedX));
+      node.y = Math.max(30, Math.min(BASE_HEIGHT - 30, snapResult.snappedY));
       render();
+      renderGuides(snapResult.guides);
     }
   } else if (draggingLabel) {
     if (draggingLabel.kind === 'transition') {
@@ -784,6 +954,7 @@ svg.addEventListener('pointermove', e => {
 const endDrag = e => {
   if (dragging || draggingLabel) {
     try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+    clearGuides();
     saveLocal();
     dragging = null;
     draggingLabel = null;

@@ -175,6 +175,27 @@ svg {
 .arc path.selected { stroke: var(--accent); stroke-width: 2.8px; filter: drop-shadow(0 0 5px var(--accent)); }
 .arc-label { font-size: 11px; fill: var(--arc); cursor: move; user-select: none; }
 .arc line.pending { stroke-dasharray: 4 3; }
+.align-guide {
+  stroke: var(--accent);
+  stroke-width: 1.2px;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+  opacity: 0.85;
+}
+.spacing-guide {
+  stroke: var(--enabled);
+  stroke-width: 1.4px;
+  stroke-dasharray: 3 2;
+  pointer-events: none;
+  opacity: 0.9;
+}
+.guide-text {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--enabled);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+}
 #error {
   position: absolute;
   bottom: 14px;
