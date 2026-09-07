@@ -17,6 +17,7 @@ let arcSource = null;
 let selected = null;
 let dragging = null;
 let draggingLabel = null;
+let panning = null;
 let dragMoved = false;
 let matrixView = 'incidence';
 let matrixOpen = false;
@@ -25,7 +26,13 @@ const MAX_HISTORY = 80;
 let history = [];
 let historyIndex = -1;
 let restoringHistory = false;
-let svgZoom = 1;
+
+const BASE_WIDTH = 2000;
+const BASE_HEIGHT = 1400;
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 3.0;
+const ZOOM_STEP = 0.15;
+let currentZoomLevel = 1.0;
 
 const HINTS = {
   select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, or drag its label to reposition just the text.',
@@ -439,11 +446,20 @@ document.getElementById('theme-toggle').onclick = () => {
 
 
 
-document.getElementById('matrix-toggle').onclick = () => {
-  matrixOpen = !matrixOpen;
-  document.getElementById('matrix-panel').hidden = !matrixOpen;
-  if (matrixOpen) renderMatrices();
-};
+const matrixModal = document.getElementById('matrix-modal');
+function openMatrices() {
+  matrixOpen = true;
+  matrixModal.hidden = false;
+  renderMatrices();
+  document.getElementById('matrix-close').focus();
+}
+function closeMatrices() {
+  matrixOpen = false;
+  matrixModal.hidden = true;
+}
+document.getElementById('matrix-toggle').onclick = openMatrices;
+document.getElementById('matrix-close').onclick = closeMatrices;
+document.getElementById('matrix-backdrop').onclick = closeMatrices;
 document.getElementById('matrix-incidence-tab').onclick = () => {
   matrixView = 'incidence';
   document.getElementById('matrix-incidence-tab').classList.add('active');
@@ -535,14 +551,20 @@ document.getElementById('file-input').onchange = async e => {
 };
 
 function svgPoint(evt) {
+  if (svg.getScreenCTM) {
+    const ctm = svg.getScreenCTM();
+    if (ctm) {
+      const pt = svg.createSVGPoint();
+      pt.x = evt.clientX;
+      pt.y = evt.clientY;
+      const transformed = pt.matrixTransform(ctm.inverse());
+      return { x: transformed.x, y: transformed.y };
+    }
+  }
   const rect = svg.getBoundingClientRect();
-
-  // The SVG is scaled with CSS transform. getBoundingClientRect() already
-  // reflects the canvas scroll position, so do NOT add scrollLeft/scrollTop.
-  // Convert screen pixels back to the SVG's logical coordinate system.
   return {
-    x: (evt.clientX - rect.left) / svgZoom,
-    y: (evt.clientY - rect.top) / svgZoom
+    x: (evt.clientX - rect.left) / currentZoomLevel,
+    y: (evt.clientY - rect.top) / currentZoomLevel
   };
 }
 
@@ -625,35 +647,112 @@ svg.addEventListener('click', e => {
   }
 });
 
-nodesLayer.addEventListener('pointerdown', e => {
+// Pointer interaction -------------------------------------------------------
+// Touch has two different jobs in Select mode:
+//   * over an entity -> move the entity
+//   * over empty canvas -> pan the viewport
+// The pan handler lives on #canvas-wrap rather than SVG. This is important
+// because the SVG can contain empty regions and browsers/devtools differ in
+// how they dispatch touch events to SVG elements.
+const canvasWrap = document.getElementById('canvas-wrap');
+const sidebar = document.getElementById('sidebar');
+
+// Interação de Pan (Mover o Canvas)
+canvasWrap.addEventListener('pointerdown', e => {
+  // Se o clique/toque foi em um elemento interativo do SVG, não inicia o Pan
+  if (e.target.closest('[data-name]')) return;
+
+  panning = {
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    scrollLeft: canvasWrap.scrollLeft,
+    scrollTop: canvasWrap.scrollTop,
+    captured: false
+  };
+  dragMoved = false;
+});
+
+canvasWrap.addEventListener('pointermove', e => {
+  if (!panning || e.pointerId !== panning.pointerId) return;
+  
+  const dx = e.clientX - panning.startX;
+  const dy = e.clientY - panning.startY;
+
+  if (Math.hypot(dx, dy) > 3) {
+    dragMoved = true;
+    if (!panning.captured) {
+      panning.captured = true;
+      try { canvasWrap.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+    e.preventDefault();
+    canvasWrap.scrollLeft = panning.scrollLeft - dx;
+    canvasWrap.scrollTop = panning.scrollTop - dy;
+  }
+});
+
+const endPan = e => {
+  if (panning && e.pointerId === panning.pointerId) {
+    if (panning.captured) {
+      try { canvasWrap.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+    panning = null;
+  }
+};
+
+canvasWrap.addEventListener('pointerup', endPan);
+canvasWrap.addEventListener('pointercancel', endPan);
+
+// Interação de Drag (Mover Nós e Legendas)
+function startDragNode(e) {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
-  if (hit) hit.setPointerCapture?.(e.pointerId);
   if (!hit) return;
-  dragMoved = false;
-  if (e.target.dataset.role === 'label')
-    draggingLabel = {kind: hit.dataset.kind, name: hit.dataset.name};
-  else
-    dragging = hit.dataset.name;
-});
 
-arcsLayer.addEventListener('pointerdown', e => {
-  if (mode !== 'select' || e.target.dataset.role !== 'label') return;
+  e.stopPropagation();
   e.preventDefault();
-  const hit = e.target.closest('[data-name]');
-  if (!hit) return;
+
   dragMoved = false;
-  draggingLabel = {kind: 'transition', name: hit.dataset.name};
-});
+  const isLabel = e.target.dataset.role === 'label';
+
+  if (isLabel) {
+    draggingLabel = { kind: hit.dataset.kind, name: hit.dataset.name };
+  } else {
+    dragging = hit.dataset.name;
+  }
+
+  // Bind pointer capture to static svg element (not hit, which gets recreated by render())
+  try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+nodesLayer.addEventListener('pointerdown', startDragNode);
+arcsLayer.addEventListener('pointerdown', startDragNode);
 
 svg.addEventListener('pointermove', e => {
+  if (panning) return;
+  const pt = svgPoint(e);
+
+  // Update pending arc line preview if connecting nodes
+  if (mode === 'arc' && arcSource) {
+    const pendingLine = document.getElementById('pending-arc');
+    if (pendingLine) {
+      pendingLine.setAttribute('x2', pt.x);
+      pendingLine.setAttribute('y2', pt.y);
+    }
+  }
+
   if (!dragging && !draggingLabel) return;
+
   e.preventDefault();
   dragMoved = true;
-  const pt = svgPoint(e);
+
   if (dragging) {
     const node = findNode(dragging);
-    if (node) { node.x = pt.x; node.y = pt.y; render(); }
+    if (node) {
+      node.x = Math.max(30, Math.min(BASE_WIDTH - 30, pt.x));
+      node.y = Math.max(30, Math.min(BASE_HEIGHT - 30, pt.y));
+      render();
+    }
   } else if (draggingLabel) {
     if (draggingLabel.kind === 'transition') {
       const t = netData.transitions.find(x => x.name === draggingLabel.name);
@@ -679,13 +778,39 @@ svg.addEventListener('pointermove', e => {
   }
 });
 
-window.addEventListener('pointerup', () => {
+const endDrag = e => {
   if (dragging || draggingLabel) {
+    try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     saveLocal();
     dragging = null;
     draggingLabel = null;
   }
+};
+
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+// Some mobile browsers/devtools don't provide native overflow scrolling when
+// touch-action is constrained by the editor. Give the sidebar its own touch
+// scroll fallback. Buttons/inputs are excluded so they remain clickable.
+let menuPan = null;
+sidebar.addEventListener('pointerdown', e => {
+  if (e.target.closest('button,input,textarea,select')) return;
+  menuPan = { id: e.pointerId, y: e.clientY, scroll: sidebar.scrollTop };
+  try { sidebar.setPointerCapture(e.pointerId); } catch (_) {}
 });
+sidebar.addEventListener('pointermove', e => {
+  if (!menuPan || e.pointerId !== menuPan.id) return;
+  const dy = e.clientY - menuPan.y;
+  if (Math.abs(dy) > 2) e.preventDefault();
+  sidebar.scrollTop = menuPan.scroll - dy;
+});
+sidebar.addEventListener('pointerup', () => { menuPan = null; });
+sidebar.addEventListener('pointercancel', () => { menuPan = null; });
+sidebar.addEventListener('wheel', e => {
+  if (sidebar.scrollHeight > sidebar.clientHeight) {
+    sidebar.scrollTop += e.deltaY;
+  }
+}, {passive: true});
 
 function selectNode(kind, name) {
   selected = {kind, name};
@@ -893,6 +1018,7 @@ function render() {
     const s = findNode(arcSource);
     if (s) {
       const line = document.createElementNS(svg.namespaceURI, 'line');
+      line.setAttribute('id', 'pending-arc');
       line.setAttribute('class', 'pending');
       line.setAttribute('x1', s.x); line.setAttribute('y1', s.y);
       line.setAttribute('x2', s.x); line.setAttribute('y2', s.y);
@@ -976,6 +1102,7 @@ function isTypingTarget(target) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!helpModal.hidden) { closeHelp(); return; }
+    if (matrixOpen) { closeMatrices(); return; }
     selected = null;
     arcSource = null;
     setMode('select');
@@ -1021,9 +1148,42 @@ document.addEventListener('keydown', e => {
       document.getElementById('theme-toggle').click();
       return;
     }
-    if (key === '/') {
+    if (key === '/' || e.key === '/') {
       e.preventDefault();
       openHelp('shortcuts');
+      return;
+    }
+    if (e.key === '=' || e.key === '+' || key === '=' || key === '+') {
+      e.preventDefault();
+      applyZoom(currentZoomLevel + ZOOM_STEP);
+      return;
+    }
+    if (e.key === '-' || key === '-') {
+      e.preventDefault();
+      applyZoom(currentZoomLevel - ZOOM_STEP);
+      return;
+    }
+    if (e.key === '0' || key === '0') {
+      e.preventDefault();
+      applyZoom(1.0);
+      return;
+    }
+  }
+
+  if (!isTypingTarget(e.target)) {
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      applyZoom(currentZoomLevel + ZOOM_STEP);
+      return;
+    }
+    if (e.key === '-') {
+      e.preventDefault();
+      applyZoom(currentZoomLevel - ZOOM_STEP);
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      applyZoom(1.0);
       return;
     }
   }
@@ -1050,20 +1210,151 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Canvas zoom controls
-function applyZoom() {
-  svg.style.transformOrigin = '0 0';
-  svg.style.transform = `scale(${svgZoom})`;
+// Canvas zoom controls (PC & Mobile implementation) ------------------------
+
+/**
+ * Apply canvas zoom with focal point centering.
+ * @param {number} newZoomLevel - Target zoom scale
+ * @param {number} [centerClientX] - Client X coordinate of focal center point
+ * @param {number} [centerClientY] - Client Y coordinate of focal center point
+ */
+function applyZoom(newZoomLevel, centerClientX, centerClientY) {
+  const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(newZoomLevel * 100) / 100));
+  if (targetZoom === currentZoomLevel && svg.getAttribute('viewBox')) return;
+
+  const oldZoom = currentZoomLevel;
+  currentZoomLevel = targetZoom;
+
+  const rect = canvasWrap.getBoundingClientRect();
+  let focalX = centerClientX !== undefined ? (centerClientX - rect.left) : (canvasWrap.clientWidth / 2);
+  let focalY = centerClientY !== undefined ? (centerClientY - rect.top) : (canvasWrap.clientHeight / 2);
+
+  focalX = Math.max(0, Math.min(canvasWrap.clientWidth, focalX));
+  focalY = Math.max(0, Math.min(canvasWrap.clientHeight, focalY));
+
+  const ratio = currentZoomLevel / oldZoom;
+  const newScrollLeft = (canvasWrap.scrollLeft + focalX) * ratio - focalX;
+  const newScrollTop = (canvasWrap.scrollTop + focalY) * ratio - focalY;
+
+  const scaledWidth = Math.round(BASE_WIDTH * currentZoomLevel);
+  const scaledHeight = Math.round(BASE_HEIGHT * currentZoomLevel);
+
+  svg.setAttribute('width', scaledWidth);
+  svg.setAttribute('height', scaledHeight);
+  svg.style.width = `${scaledWidth}px`;
+  svg.style.height = `${scaledHeight}px`;
+  svg.setAttribute('viewBox', `0 0 ${BASE_WIDTH} ${BASE_HEIGHT}`);
+
+  canvasWrap.scrollLeft = newScrollLeft;
+  canvasWrap.scrollTop = newScrollTop;
+
+  const zoomDisplay = document.getElementById('zoom-level');
+  if (zoomDisplay) {
+    zoomDisplay.textContent = `${Math.round(currentZoomLevel * 100)}%`;
+  }
 }
-document.getElementById('zoom-in').onclick = () => {
-  svgZoom = Math.min(2, +(svgZoom + 0.1).toFixed(2));
-  applyZoom();
-};
-document.getElementById('zoom-out').onclick = () => {
-  svgZoom = Math.max(0.5, +(svgZoom - 0.1).toFixed(2));
-  applyZoom();
-};
-document.getElementById('zoom-reset').onclick = () => {
-  svgZoom = 1;
-  applyZoom();
-};
+
+// 1. Toolbar button listeners
+const btnIn = document.getElementById('zoom-in');
+if (btnIn) {
+  btnIn.onclick = (e) => {
+    e.preventDefault();
+    applyZoom(currentZoomLevel + ZOOM_STEP);
+  };
+}
+
+const btnOut = document.getElementById('zoom-out');
+if (btnOut) {
+  btnOut.onclick = (e) => {
+    e.preventDefault();
+    applyZoom(currentZoomLevel - ZOOM_STEP);
+  };
+}
+
+const btnReset = document.getElementById('zoom-reset');
+if (btnReset) {
+  btnReset.onclick = (e) => {
+    e.preventDefault();
+    applyZoom(1.0);
+  };
+}
+
+const zoomBadge = document.getElementById('zoom-level');
+if (zoomBadge) {
+  zoomBadge.onclick = (e) => {
+    e.preventDefault();
+    applyZoom(1.0);
+  };
+}
+
+// 2. PC Mouse Wheel & Trackpad Pinch Zoom (centered at mouse cursor)
+if (canvasWrap) {
+  canvasWrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.12 : -0.12;
+    applyZoom(currentZoomLevel + delta, e.clientX, e.clientY);
+  }, { passive: false });
+}
+
+// 3. Mobile Touch 2-Finger Pinch-to-Zoom & Double-Tap
+let initialPinchDist = null;
+let initialPinchZoom = 1.0;
+let lastTapTime = 0;
+
+if (canvasWrap) {
+  canvasWrap.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      // Cancel single finger dragging / panning while pinching
+      dragging = null;
+      draggingLabel = null;
+      panning = null;
+
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      initialPinchDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      initialPinchZoom = currentZoomLevel;
+    }
+  }, { passive: true });
+
+  canvasWrap.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && initialPinchDist) {
+      if (e.cancelable) e.preventDefault();
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      if (currentDist > 0) {
+        const scaleRatio = currentDist / initialPinchDist;
+        const targetZoom = initialPinchZoom * scaleRatio;
+        const midX = (t1.clientX + t2.clientX) / 2;
+        const midY = (t1.clientY + t2.clientY) / 2;
+        applyZoom(targetZoom, midX, midY);
+      }
+    }
+  }, { passive: false });
+
+  const endPinch = (e) => {
+    if (e.touches.length < 2) {
+      initialPinchDist = null;
+    }
+  };
+  canvasWrap.addEventListener('touchend', endPinch, { passive: true });
+  canvasWrap.addEventListener('touchcancel', endPinch, { passive: true });
+
+  // Double-tap on canvas space to toggle zoom on touch devices
+  canvasWrap.addEventListener('touchend', (e) => {
+    if (e.touches.length === 0 && e.changedTouches.length === 1) {
+      const now = Date.now();
+      const touch = e.changedTouches[0];
+      if (now - lastTapTime < 300 && !e.target.closest('[data-name]')) {
+        const nextZoom = currentZoomLevel === 1.0 ? 1.5 : 1.0;
+        applyZoom(nextZoom, touch.clientX, touch.clientY);
+      }
+      lastTapTime = now;
+    }
+  }, { passive: true });
+}
+
+// Initial zoom setup
+applyZoom(currentZoomLevel);
+
+

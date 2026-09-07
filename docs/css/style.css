@@ -251,20 +251,55 @@ body {
 }
 #canvas-toolbar {
   position: sticky;
-  top: 10px;
-  left: 10px;
-  z-index: 5;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
   display: flex;
+  align-items: center;
   gap: 4px;
   width: max-content;
   margin: 10px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.08);
 }
 #canvas-toolbar button {
-  width: 34px;
-  min-height: 34px;
+  width: 36px;
+  min-height: 36px;
+  height: 36px;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+#canvas-toolbar button:hover {
   background: var(--surface);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#zoom-level {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  padding: 0 8px;
+  user-select: none;
+  cursor: pointer;
+  line-height: 36px;
+}
+#zoom-level:hover {
+  color: var(--accent);
 }
 
 /* Help dialog */
@@ -364,7 +399,6 @@ button, input, textarea, select { touch-action: manipulation; }
   #inspector { max-height: 23dvh; overflow-y: auto; padding-top: 8px; }
   #canvas-wrap { width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; overflow: auto; -webkit-overflow-scrolling: touch; }
   #canvas-toolbar { position: sticky; top: 8px; margin: 8px; }
-  svg { min-width: 900px; min-height: 650px; }
 
   #help-dialog {
     top: 58px; right: 8px; width: calc(100vw - 16px);
@@ -381,4 +415,21 @@ button, input, textarea, select { touch-action: manipulation; }
   #inspector { font-size: 12px; }
   .matrix-table { font-size: 10px; }
   #matrix-dialog .matrix-tabs button { min-height: 40px; }
+}
+/* Correção para touch e drag no canvas */
+#canvas-wrap {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: auto;
+}
+
+#svg {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#svg text, #svg circle, #svg rect, #svg path {
+  touch-action: none;
 }

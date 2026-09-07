@@ -45,15 +45,6 @@
         <button id="matrix-toggle">▦ Matrices</button>
       </div>
 
-      <div id="matrix-panel" hidden>
-        <div class="matrix-tabs">
-          <button id="matrix-incidence-tab" class="active">Incidence</button>
-          <button id="matrix-output-tab">Marking</button>
-        </div>
-        <div id="matrix-content"></div>
-        <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
-      </div>
-
       <div id="hint">Click "Add Place" or "Add Transition", then click on the canvas to drop a node. Switch to "Add Arc" and click a source node then a target node to connect them. Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.</div>
 
       <div id="inspector" hidden></div>
@@ -62,9 +53,10 @@
 
     <section id="canvas-wrap">
       <div id="canvas-toolbar">
-        <button id="zoom-in" title="Zoom in">⌕+</button>
-        <button id="zoom-out" title="Zoom out">⌕−</button>
-        <button id="zoom-reset" title="Reset zoom">⛶</button>
+        <button id="zoom-in" title="Zoom in (+)">⌕+</button>
+        <button id="zoom-out" title="Zoom out (-)">⌕−</button>
+        <button id="zoom-reset" title="Reset zoom (100%)">⛶</button>
+        <span id="zoom-level" title="Click to reset zoom (100%)">100%</span>
       </div>
       <svg id="svg" width="2000" height="1400">
         <defs>
@@ -80,6 +72,20 @@
       </svg>
     </section>
   </main>
+
+  <div id="matrix-modal" hidden>
+    <div id="matrix-backdrop"></div>
+    <section id="matrix-dialog" role="dialog" aria-modal="true" aria-labelledby="matrix-title">
+      <button id="matrix-close" class="modal-close" aria-label="Close matrices">×</button>
+      <h2 id="matrix-title">▦ Matrices</h2>
+      <div class="matrix-tabs">
+        <button id="matrix-incidence-tab" class="active">Incidence</button>
+        <button id="matrix-output-tab">Marking</button>
+      </div>
+      <div id="matrix-content"></div>
+      <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
+    </section>
+  </div>
 
   <div id="help-modal" hidden>
     <div id="help-backdrop"></div>
@@ -101,7 +107,7 @@
           <div>
             <article class="help-item"><span class="help-icon">▦</span><div><h3>Matrices</h3><p>The incidence matrix describes the relation between places and arcs. The marking vector shows the current number of tokens in each place.</p></div></article>
             <article class="help-item"><span class="help-icon">⇩</span><div><h3>Save / Load</h3><p>Your current net is saved automatically in the browser. Use Export / Import JSON to move a net between browsers or devices.</p></div></article>
-            <article class="help-item"><span class="help-icon">📱</span><div><h3>Mobile</h3><p>Tap and drag elements on touch screens. The canvas can be scrolled horizontally and vertically for larger nets.</p></div></article>
+            <article class="help-item"><span class="help-icon">📱</span><div><h3>Mobile &amp; Zoom</h3><p>Pinch with two fingers or double-tap to zoom on mobile. Use Ctrl+Scroll, keyboard shortcuts (+/-), or toolbar buttons on desktop.</p></div></article>
           </div>
         </div>
       </div>
@@ -110,11 +116,13 @@
         <div class="shortcut-list">
           <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>Y</kbd><span>Redo</span></div>
-          <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd><span>Export net (JSON)</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>O</kbd><span>Import net (JSON)</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>M</kbd><span>Toggle matrices</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>D</kbd><span>Toggle dark mode</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>+</kbd> / <kbd>−</kbd><span>Zoom in / out</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>0</kbd><span>Reset zoom (100%)</span></div>
           <div><kbd>Delete</kbd><span>Delete selected element</span></div>
           <div><kbd>Space</kbd><span>Fire selected transition</span></div>
           <div><kbd>Esc</kbd><span>Deselect / cancel</span></div>
