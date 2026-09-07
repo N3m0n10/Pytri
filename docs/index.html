@@ -45,6 +45,15 @@
         <button id="matrix-toggle">▦ Matrices</button>
       </div>
 
+      <div id="matrix-panel" hidden>
+        <div class="matrix-tabs">
+          <button id="matrix-incidence-tab" class="active">Incidence</button>
+          <button id="matrix-output-tab">Marking</button>
+        </div>
+        <div id="matrix-content"></div>
+        <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
+      </div>
+
       <div id="hint">Click "Add Place" or "Add Transition", then click on the canvas to drop a node. Switch to "Add Arc" and click a source node then a target node to connect them. Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.</div>
 
       <div id="inspector" hidden></div>
@@ -71,20 +80,6 @@
       </svg>
     </section>
   </main>
-
-  <div id="matrix-modal" hidden>
-    <div id="matrix-backdrop"></div>
-    <section id="matrix-dialog" role="dialog" aria-modal="true" aria-labelledby="matrix-title">
-      <button id="matrix-close" class="modal-close" aria-label="Close matrices">×</button>
-      <h2 id="matrix-title">▦ Matrices</h2>
-      <div class="matrix-tabs">
-        <button id="matrix-incidence-tab" class="active">Incidence</button>
-        <button id="matrix-output-tab">Marking</button>
-      </div>
-      <div id="matrix-content"></div>
-      <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
-    </section>
-  </div>
 
   <div id="help-modal" hidden>
     <div id="help-backdrop"></div>
@@ -115,7 +110,7 @@
         <div class="shortcut-list">
           <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>Y</kbd><span>Redo</span></div>
-          <div><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd><span>Export net (JSON)</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>O</kbd><span>Import net (JSON)</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>M</kbd><span>Toggle matrices</span></div>

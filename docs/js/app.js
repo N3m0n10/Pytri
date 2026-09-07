@@ -17,7 +17,6 @@ let arcSource = null;
 let selected = null;
 let dragging = null;
 let draggingLabel = null;
-let panning = null;
 let dragMoved = false;
 let matrixView = 'incidence';
 let matrixOpen = false;
@@ -440,20 +439,11 @@ document.getElementById('theme-toggle').onclick = () => {
 
 
 
-const matrixModal = document.getElementById('matrix-modal');
-function openMatrices() {
-  matrixOpen = true;
-  matrixModal.hidden = false;
-  renderMatrices();
-  document.getElementById('matrix-close').focus();
-}
-function closeMatrices() {
-  matrixOpen = false;
-  matrixModal.hidden = true;
-}
-document.getElementById('matrix-toggle').onclick = openMatrices;
-document.getElementById('matrix-close').onclick = closeMatrices;
-document.getElementById('matrix-backdrop').onclick = closeMatrices;
+document.getElementById('matrix-toggle').onclick = () => {
+  matrixOpen = !matrixOpen;
+  document.getElementById('matrix-panel').hidden = !matrixOpen;
+  if (matrixOpen) renderMatrices();
+};
 document.getElementById('matrix-incidence-tab').onclick = () => {
   matrixView = 'incidence';
   document.getElementById('matrix-incidence-tab').classList.add('active');
@@ -545,10 +535,11 @@ document.getElementById('file-input').onchange = async e => {
 };
 
 function svgPoint(evt) {
-  // The SVG keeps its logical coordinate system at 2000x1400. Zoom changes
-  // only its rendered CSS size. getBoundingClientRect() already contains
-  // the current canvas scroll offset, so DO NOT add scrollLeft/scrollTop.
   const rect = svg.getBoundingClientRect();
+
+  // The SVG is scaled with CSS transform. getBoundingClientRect() already
+  // reflects the canvas scroll position, so do NOT add scrollLeft/scrollTop.
+  // Convert screen pixels back to the SVG's logical coordinate system.
   return {
     x: (evt.clientX - rect.left) / svgZoom,
     y: (evt.clientY - rect.top) / svgZoom
@@ -634,55 +625,11 @@ svg.addEventListener('click', e => {
   }
 });
 
-// Pointer interaction -------------------------------------------------------
-// Touch has two different jobs in Select mode:
-//   * over an entity -> move the entity
-//   * over empty canvas -> pan the viewport
-// The pan handler lives on #canvas-wrap rather than SVG. This is important
-// because the SVG can contain empty regions and browsers/devtools differ in
-// how they dispatch touch events to SVG elements.
-const canvasWrap = document.getElementById('canvas-wrap');
-const sidebar = document.getElementById('sidebar');
-
-canvasWrap.addEventListener('pointerdown', e => {
-  if (mode !== 'select') return;
-  if (e.target.closest('[data-name]')) return; // entity dragging owns it
-
-  e.preventDefault();
-  panning = {
-    pointerId: e.pointerId,
-    startX: e.clientX,
-    startY: e.clientY,
-    scrollLeft: canvasWrap.scrollLeft,
-    scrollTop: canvasWrap.scrollTop,
-    moved: false
-  };
-  try { canvasWrap.setPointerCapture(e.pointerId); } catch (_) {}
-});
-
-canvasWrap.addEventListener('pointermove', e => {
-  if (!panning || e.pointerId !== panning.pointerId) return;
-  e.preventDefault();
-  canvasWrap.scrollLeft = panning.scrollLeft - (e.clientX - panning.startX);
-  canvasWrap.scrollTop = panning.scrollTop - (e.clientY - panning.startY);
-  panning.moved = true;
-  dragMoved = true;
-});
-
-canvasWrap.addEventListener('pointerup', e => {
-  if (panning && e.pointerId === panning.pointerId) {
-    try { canvasWrap.releasePointerCapture(e.pointerId); } catch (_) {}
-    panning = null;
-  }
-});
-canvasWrap.addEventListener('pointercancel', () => { panning = null; });
-
 nodesLayer.addEventListener('pointerdown', e => {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
+  if (hit) hit.setPointerCapture?.(e.pointerId);
   if (!hit) return;
-  e.preventDefault();
-  hit.setPointerCapture?.(e.pointerId);
   dragMoved = false;
   if (e.target.dataset.role === 'label')
     draggingLabel = {kind: hit.dataset.kind, name: hit.dataset.name};
@@ -692,16 +639,14 @@ nodesLayer.addEventListener('pointerdown', e => {
 
 arcsLayer.addEventListener('pointerdown', e => {
   if (mode !== 'select' || e.target.dataset.role !== 'label') return;
+  e.preventDefault();
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
-  e.preventDefault();
-  hit.setPointerCapture?.(e.pointerId);
   dragMoved = false;
   draggingLabel = {kind: 'transition', name: hit.dataset.name};
 });
 
 svg.addEventListener('pointermove', e => {
-  if (panning) return; // canvasWrap owns the pan gesture
   if (!dragging && !draggingLabel) return;
   e.preventDefault();
   dragMoved = true;
@@ -734,42 +679,13 @@ svg.addEventListener('pointermove', e => {
   }
 });
 
-window.addEventListener('pointerup', e => {
-  if (panning && e.pointerId === panning.pointerId) panning = null;
+window.addEventListener('pointerup', () => {
   if (dragging || draggingLabel) {
     saveLocal();
     dragging = null;
     draggingLabel = null;
   }
 });
-window.addEventListener('pointercancel', () => {
-  panning = null;
-  dragging = null;
-  draggingLabel = null;
-});
-
-// Some mobile browsers/devtools don't provide native overflow scrolling when
-// touch-action is constrained by the editor. Give the sidebar its own touch
-// scroll fallback. Buttons/inputs are excluded so they remain clickable.
-let menuPan = null;
-sidebar.addEventListener('pointerdown', e => {
-  if (e.target.closest('button,input,textarea,select')) return;
-  menuPan = { id: e.pointerId, y: e.clientY, scroll: sidebar.scrollTop };
-  try { sidebar.setPointerCapture(e.pointerId); } catch (_) {}
-});
-sidebar.addEventListener('pointermove', e => {
-  if (!menuPan || e.pointerId !== menuPan.id) return;
-  const dy = e.clientY - menuPan.y;
-  if (Math.abs(dy) > 2) e.preventDefault();
-  sidebar.scrollTop = menuPan.scroll - dy;
-});
-sidebar.addEventListener('pointerup', () => { menuPan = null; });
-sidebar.addEventListener('pointercancel', () => { menuPan = null; });
-sidebar.addEventListener('wheel', e => {
-  if (sidebar.scrollHeight > sidebar.clientHeight) {
-    sidebar.scrollTop += e.deltaY;
-  }
-}, {passive: true});
 
 function selectNode(kind, name) {
   selected = {kind, name};
@@ -1060,7 +976,6 @@ function isTypingTarget(target) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!helpModal.hidden) { closeHelp(); return; }
-    if (matrixOpen) { closeMatrices(); return; }
     selected = null;
     arcSource = null;
     setMode('select');
@@ -1135,60 +1050,20 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Canvas zoom controls ------------------------------------------------------
-const BASE_SVG_WIDTH = 2000;
-const BASE_SVG_HEIGHT = 1400;
-
-function setZoom(newZoom, clientX = null, clientY = null) {
-  newZoom = Math.max(0.5, Math.min(2, Number(newZoom.toFixed(2))));
-  const oldZoom = svgZoom;
-  if (newZoom === oldZoom) return;
-
-  const wrapRect = canvasWrap.getBoundingClientRect();
-  let logicalX, logicalY;
-  if (clientX != null && clientY != null) {
-    const svgRect = svg.getBoundingClientRect();
-    logicalX = (clientX - svgRect.left) / oldZoom;
-    logicalY = (clientY - svgRect.top) / oldZoom;
-  } else {
-    logicalX = (canvasWrap.scrollLeft + canvasWrap.clientWidth / 2) / oldZoom;
-    logicalY = (canvasWrap.scrollTop + canvasWrap.clientHeight / 2) / oldZoom;
-    clientX = wrapRect.left + canvasWrap.clientWidth / 2;
-    clientY = wrapRect.top + canvasWrap.clientHeight / 2;
-  }
-
-  svgZoom = newZoom;
-  svg.style.transform = 'none';
-  svg.style.transformOrigin = '0 0';
-  svg.style.width = `${BASE_SVG_WIDTH * svgZoom}px`;
-  svg.style.height = `${BASE_SVG_HEIGHT * svgZoom}px`;
-
-  // Keep the same logical point under the pointer after zooming.
-  requestAnimationFrame(() => {
-    const wr = canvasWrap.getBoundingClientRect();
-    canvasWrap.scrollLeft = Math.max(0, logicalX * svgZoom - (clientX - wr.left));
-    canvasWrap.scrollTop = Math.max(0, logicalY * svgZoom - (clientY - wr.top));
-  });
-}
-
+// Canvas zoom controls
 function applyZoom() {
-  svg.style.transform = 'none';
-  svg.style.width = `${BASE_SVG_WIDTH * svgZoom}px`;
-  svg.style.height = `${BASE_SVG_HEIGHT * svgZoom}px`;
+  svg.style.transformOrigin = '0 0';
+  svg.style.transform = `scale(${svgZoom})`;
 }
-
 document.getElementById('zoom-in').onclick = () => {
-  const r = canvasWrap.getBoundingClientRect();
-  setZoom(svgZoom + 0.1, r.left + r.width / 2, r.top + r.height / 2);
+  svgZoom = Math.min(2, +(svgZoom + 0.1).toFixed(2));
+  applyZoom();
 };
 document.getElementById('zoom-out').onclick = () => {
-  const r = canvasWrap.getBoundingClientRect();
-  setZoom(svgZoom - 0.1, r.left + r.width / 2, r.top + r.height / 2);
+  svgZoom = Math.max(0.5, +(svgZoom - 0.1).toFixed(2));
+  applyZoom();
 };
 document.getElementById('zoom-reset').onclick = () => {
-  const r = canvasWrap.getBoundingClientRect();
-  setZoom(1, r.left + r.width / 2, r.top + r.height / 2);
+  svgZoom = 1;
+  applyZoom();
 };
-
-applyZoom();
-
