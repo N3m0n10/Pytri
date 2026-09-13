@@ -359,6 +359,54 @@ class PETRI:
         outgoing = [t for t in self.transitions.values() if t.source.name == node_name]
         return {"incoming": incoming, "outgoing": outgoing}
 
+    # ---- net type naming  ---------------------------------------------#
+    @property
+    def net_type(self):
+        """Return a string describing the net type based on its arcs."""
+        """Naming according to TINA"""
+        has_inhibitor = any(t.arc_type == "inhibitor" for t in self.transitions.values())
+        has_read = any(t.arc_type == "read" for t in self.transitions.values())
+        if has_inhibitor and has_read:
+            return "Inhibitor + Read Arc Petri Net"
+        elif has_inhibitor:
+            return "Inhibitor Petri Net"
+        elif has_read:
+            return "Read Arc Petri Net"
+        else:
+            return "Ordinary Petri Net"
+
+    @property
+    def net_descriptionn(self):
+        """Naming according to Discrete control naming, and the book {TODO:check name}"""
+        # TODO: USE MATRIX
+        type_list = []
+        one_ticket = sum(state.ficha_count for state in self.states.values()) == 1
+        all_connected = all((len(t.source) > 0 and len(t.target) > 0) for t in self.transitions.values())
+        one_connection_t = any((len(t.source) < 2 and len(t.target) < 2) for t in self.transitions.values())
+        pres = [t.source.name for t in self.transitions.values() if isinstance(t.source, State)]
+        posts = [t.target.name for t in self.transitions.values() if isinstance(t.target, State)]
+        one_connection_s = any((len(t.source) < 2 and len(t.target) < 2) for t in self.transitions.values())
+        all_weight_1 = all(t.weight == 1 for t in self.transitions.values())
+        has_inhibitor = any(t.arc_type == "inhibitor" for t in self.transitions.values())
+        has_read = any(t.arc_type == "read" for t in self.transitions.values())
+        if all_weight_1:
+            type_list.append("Ordinary")
+            if one_connection_t:
+                type_list.append("State Machine")
+                if one_ticket:
+                    type_list.append("Automatus like")
+        if posts == set(posts):
+            type_list.append("Free of conflicts")
+            if pres == set(pres):
+                type_list.append("Marked Graph")
+        if any(pres.count(pre) > 1 for pre in set(pres)):
+            type_list.append("Free Choice")
+            #    type_list.append("Expanded Free Choice") # TODO: annoying
+        if any(t.value > 1 for t in self.transitions.values()):
+            type_list.append("Generalizad")
+        # type_list.append("Live")
+        return type_list
+
     # ---- simulation primitives ---------------------------------------------#
     # The actual run loop (Simulation.run/next_state -- deciding *which*
     # enabled action to fire and stepping through time) is still future
@@ -408,9 +456,8 @@ class PETRI:
             if t.arc_type in ("normal", "read"):
                 if tokens < t.weight:
                     return False
-            elif t.arc_type == "inhibitor":
-                if tokens >= t.weight:
-                    return False
+            elif t.arc_type == "inhibitor" and tokens >= t.weight:
+                return False
         return True
 
     def list_enabled_actions(self):
@@ -533,7 +580,7 @@ class Simulation:
     def next_state(self):
         pass  # TODO: pick + fire the next action per that policy
 
-    def enabled_transitions(self, transition_name: str = None):
+    def enabled_transitions(self, transition_name: str = None):  
         """With a name: is that one action enabled? Without: list every
         currently-enabled action name."""
         if transition_name is not None:
