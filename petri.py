@@ -17,6 +17,9 @@ directly. All validation below enforces that.
 
 import json
 
+# --------------------------------------------------------------------------- #
+# Auxiliar classes
+# --------------------------------------------------------------------------- #
 
 # --------------------------------------------------------------------------- #
 # Exceptions
@@ -337,21 +340,59 @@ class PETRI:
     # ---- matrix -----------------------------------------------------------
     @property
     def incidence_matrix(self):
-        matrix = []
-        for state in self.states:
-            for tr in self.transitions:
-                if self.transitions[tr].source.name == state:
-                    matrix.append(self.transitions[tr].weight)
-                elif self.transitions[tr].target.name == state:
-                    matrix.append(-self.transitions[tr].weight)
-                else:
-                    matrix.append(0)
+        """Returns a 2D matrix: rows = states, cols = transitions.
+        Entry [i][j] = +weight if transition j produces into state i,
+                    -weight if transition j consumes from state i,
+                    0 otherwise.
+        """
+        states = self.states
+        transitions = list(self.transitions.values())
+        state_index = {name: i for i, name in enumerate(states)}
+        num_states = len(states)
+        num_trans = len(transitions)
+        ordered_actions = list(self.actions.values())
+        num_actions = len(ordered_actions)
+
+        matrix = [[0] * num_trans for _ in range(num_states)]
+
+        for j, tr in enumerate(transitions):
+            src_idx = state_index.get(tr.source.name)
+            tgt_idx = state_index.get(tr.target.name)
+
+            if src_idx is not None:
+                matrix[src_idx][j] -= tr.weight   # tokens consumed
+            if tgt_idx is not None:
+                matrix[tgt_idx][j] += tr.weight   # tokens produced
+
         return matrix
 
     @property
     def output_matrix(self):
-        return [state.ficha_count for state in self.states]
-    
+        return [state.ficha_count for state in self.states.values()]
+
+    def next_output(self, transition_fired):
+        """transition_fired: list/vector of length num_transitions,
+        typically a 0/1 firing vector.
+        Returns the new marking vector.
+        """
+        x = self.incidence_matrix   # shape (num_states, num_transitions)
+        y = self.output_matrix      # shape (num_states,)
+        num_states = len(y)
+        num_trans = len(x[0]) if num_states else 0
+
+        if len(transition_fired) != num_trans:
+            raise ValueError(
+                f"transition_fired has length {len(transition_fired)}, "
+                f"expected {num_trans}"
+            )
+
+        output = []
+        for i in range(num_states):
+            delta = sum(x[i][j] * transition_fired[j] for j in range(num_trans))
+            output.append(y[i] + delta)
+
+        return output
+        
     # ---- inspection -------------------------------------------------------#
     def arcs_of(self, node_name: str):
         """All arcs touching a given State/Action, split into incoming/outgoing."""
@@ -359,7 +400,7 @@ class PETRI:
         outgoing = [t for t in self.transitions.values() if t.source.name == node_name]
         return {"incoming": incoming, "outgoing": outgoing}
 
-    # ---- net type naming  ---------------------------------------------#
+    # ---- Description  ---------------------------------------------#
     @property
     def net_type(self):
         """Return a string describing the net type based on its arcs."""
@@ -403,9 +444,182 @@ class PETRI:
             type_list.append("Free Choice")
             #    type_list.append("Expanded Free Choice") # TODO: annoying
         if any(t.value > 1 for t in self.transitions.values()):
-            type_list.append("Generalizad")
+            type_list.append("Generalized")
         # type_list.append("Live")
         return type_list
+
+    @property  # NOTE: This is a stub for future work. The idea is to build a reachability tree of all possible markings from the current marking, but this is not yet implemented.
+    def tree_simple(self): 
+        """Compatibility wrapper: return a reachability tree computed by
+        the matrix-based `tree_test` implementation. This avoids mutating
+        the live net state and is safe to run for testing."""
+        return self.tree_test
+
+    def tree_mtrx(self):
+        """Build a breadth-first reachability tree using the incidence
+        matrix and a marking vector. Returns a list of levels; each level
+        is a list of tuples: (marking_list, transition_name) where
+        `transition_name` is the transition fired to reach that marking
+        from its parent. The root level contains the current marking with
+        transition_name set to None.
+        """
+        # Helper: deterministic ordering of transitions (consistent with matrices)
+        def _ordered_transitions():
+            return list(self.transitions.values())
+
+        def _transition_name_by_index(idx: int):
+            trans = _ordered_transitions()
+            return trans[idx].name if 0 <= idx < len(trans) else None
+
+        def _next_output_from_marking(marking, fired_vec):
+            # incidence_matrix: rows = states, cols = transitions
+            C = self.incidence_matrix
+            num_states = len(marking)
+            num_trans = len(fired_vec)
+            # guard size
+            if not C:
+                return list(marking)
+            # compute delta = C * fired_vec
+            delta = [0] * num_states
+            for i in range(num_states):
+                s = 0
+                for j in range(num_trans):
+                    s += C[i][j] * fired_vec[j]
+                delta[i] = s
+            return [marking[i] + delta[i] for i in range(num_states)]
+
+        # BFS setup
+        root = list(self.output_matrix)
+        if len(self.states) == 0:
+            return []
+
+        transitions = _ordered_transitions()
+        num_trans = len(transitions)
+
+        visited = {tuple(root)}
+        # levels will contain lists of tuples: (marking, fired_vector, transition_name, terminal_flag)
+        levels = [[(root, [0] * num_trans, None, False)]]
+        current_level = [root]
+
+        while current_level:
+            next_level = []
+            for marking in current_level:
+                enabled_flags = self.is_enabled_by_matrix(marking)
+                for j, ok in enumerate(enabled_flags):
+                    if not ok:
+                        continue
+                    fired_vec = [0] * num_trans
+                    fired_vec[j] = 1
+                    new_marking = _next_output_from_marking(marking, fired_vec)
+                    # reject negative markings
+                    if any(n < 0 for n in new_marking):
+                        continue
+                    key = tuple(new_marking)
+                    trans_name = _transition_name_by_index(j)
+                    # convert per-arc fired vector into per-action fired vector
+                    action_vec = [0] * num_actions
+                    for arc_idx, val in enumerate(fired_vec):
+                        if val:
+                            arc = transitions[arc_idx]
+                            # determine which action this arc touches
+                            action_obj = arc.source if isinstance(arc.source, Action) else arc.target
+                            try:
+                                a_idx = ordered_actions.index(action_obj)
+                                action_vec[a_idx] = 1
+                            except ValueError:
+                                pass
+
+                    if key in visited:
+                        # Already seen -> treat as terminal (record but don't expand)
+                        next_level.append((new_marking, action_vec, trans_name, True))
+                        continue
+                    visited.add(key)
+                    next_level.append((new_marking, action_vec, trans_name, False))
+            if next_level:
+                levels.append(next_level)
+            # prepare next iteration: strip markings for BFS frontier
+            current_level = [m for m, _, _, _ in next_level]
+
+        return levels
+        
+    @property
+    def tree_test(self):
+        """Breadth-first reachability tree: list of levels; each level is a list of marking vectors."""
+        root = list(self.output_matrix)
+        if len(self.states) == 0:
+            return []
+
+        ordered_arcs = list(self.transitions.values())
+        ordered_actions = list(self.actions.values())
+        num_arcs = len(ordered_arcs)
+
+        # helper: build fired vector that includes all arcs (pre+post) of an action
+        def _fired_vec_for_action(action):
+            vec = [0] * num_arcs
+            for idx, arc in enumerate(ordered_arcs):
+                if arc.source == action or arc.target == action:
+                    vec[idx] = 1
+            return vec
+
+        # map state name -> index in marking vector
+        state_index = {name: i for i, name in enumerate(self.states)}
+
+        visited = {tuple(root)}
+        levels = [[root]]
+        current_level = [root]
+
+        while current_level:
+            next_level = []
+            for marking in current_level:
+                for action in ordered_actions:
+                    # check enabled for this action under `marking`
+                    enabled = True
+                    for pre in [a for a in ordered_arcs if a.side == 'pre' and a.target == action]:
+                        src_idx = state_index.get(pre.source.name)
+                        if src_idx is None:
+                            enabled = False
+                            break
+                        tokens = marking[src_idx]
+                        if pre.arc_type in ("normal", "read"):
+                            if tokens < pre.weight:
+                                enabled = False
+                                break
+                        elif pre.arc_type == "inhibitor":
+                            if tokens >= pre.weight:
+                                enabled = False
+                                break
+                    if not enabled:
+                        continue
+
+                    fired_vec = _fired_vec_for_action(action)
+                    # compute new marking from marking (without touching live net)
+                    C = self.incidence_matrix
+                    if not C:
+                        new_marking = list(marking)
+                    else:
+                        num_states = len(marking)
+                        delta = [0] * num_states
+                        for i in range(num_states):
+                            s = 0
+                            for j in range(num_arcs):
+                                s += C[i][j] * fired_vec[j]
+                            delta[i] = s
+                        new_marking = [marking[i] + delta[i] for i in range(num_states)]
+
+                    # skip markings that would be negative
+                    if any(n < 0 for n in new_marking):
+                        continue
+
+                    key = tuple(new_marking)
+                    if key not in visited:
+                        visited.add(key)
+                        next_level.append(new_marking)
+
+            if next_level:
+                levels.append(next_level)
+            current_level = next_level
+
+        return levels
 
     # ---- simulation primitives ---------------------------------------------#
     # The actual run loop (Simulation.run/next_state -- deciding *which*
@@ -414,24 +628,24 @@ class PETRI:
     # action's preconditions hold, and what firing it does to the marking.
     # This is what a simulation loop will call into.
 
-    def calc_state_by_matrix(self, transitions_fired:list):
-        count_f = {f: transitions_fired.count(f) for f in set(transitions_fired)} # dict with trans_name: count_fired
-        counted_t = [count_f.get(t.name, 0) for t in self.transitions] # same, but adding the ones with zeros 
-        size_rows = len(self.states)
-        size_cols = len(self.transitions)
-        rows = [self.incidence_matrix[i * size_cols:(i + 1) * size_cols] for i in range(size_rows)]
+    #def calc_state_by_matrix(self, transitions_fired:list):
+        #count_f = {f: transitions_fired.count(f) for f in set(transitions_fired)} # dict with trans_name: count_fired
+        #counted_t = [count_f.get(t.name, 0) for t in self.transitions] # same, but adding the ones with zeros 
+        #size_rows = len(self.states)
+        #size_cols = len(self.transitions)
+        #rows = [self.incidence_matrix[i * size_cols:(i + 1) * size_cols] for i in range(size_rows)]
         # Matrix multiplication: delta = C * counted_t, where C is the incidence matrix and counted_t is the vector of transition firings
-        delta = [sum(row[i] * counted_t[i] for i in range(len(counted_t)))
-            for row in rows]
+        #delta = [sum(row[i] * counted_t[i] for i in range(len(counted_t)))
+        #    for row in rows]
 
         # 4. Add the result to the initial output/marking array
-        return [out + change for out, change in zip(self.output_matrix, delta)]
+        #return [out + change for out, change in zip(self.output_matrix, delta)]
 
-    def get_state_by_matrix(self, transitions_fired:list):
-        new_state = self.calc_state_by_matrix(transitions_fired)
-        for i, state in enumerate(self.states.values()):
-            state.ficha_count = new_state[i]
-        return new_state
+    #def get_state_by_matrix(self, transitions_fired:list):
+        #new_state = self.calc_state_by_matrix(transitions_fired)
+        #for i, state in enumerate(self.states.values()):
+        #    state.ficha_count = new_state[i]
+        #return new_state
 
     def pre_arcs(self, action_name: str):
         """Input arcs (State -> Action) feeding a given action."""
@@ -459,6 +673,74 @@ class PETRI:
             elif t.arc_type == "inhibitor" and tokens >= t.weight:
                 return False
         return True
+
+    def is_enabled_by_matrix(self, output_matrix):
+        """Return a list of booleans (per transition) indicating whether
+        the transition would be enabled under the provided marking
+        vector `output_matrix`.
+
+        This mirrors `is_enabled` but works from a marking vector instead
+        of the live `State.ficha_count` values. It respects arc types:
+        - `normal`/`read`: requires place tokens >= weight
+        - `inhibitor`: requires place tokens < weight
+
+        The function returns a list with one boolean per transition in
+        the same order as `self.transitions`.
+        """
+        # Gather transitions in deterministic order (same as other matrix methods)
+        transitions = list(self.transitions.values())
+        # Validate input length: expected one token count per state
+        num_states = len(self.states)
+        if len(output_matrix) != num_states:
+            raise ValueError(
+                f"output_matrix has length {len(output_matrix)}, expected {num_states}"
+            )
+
+        # Map state name -> index into provided output_matrix
+        state_index = {name: i for i, name in enumerate(self.states)}
+
+        enabled_list = []
+        for tr in transitions:
+            enabled = True
+            # For each pre-arc (State -> Action), check its guarding condition
+            if tr.side == "pre":
+                src_idx = state_index.get(tr.source.name)
+                if src_idx is None:
+                    # malformed net: transition has a State endpoint not in states
+                    enabled = False
+                else:
+                    tokens = output_matrix[src_idx]
+                    if tr.arc_type in ("normal", "read"):
+                        if tokens < tr.weight:
+                            enabled = False
+                    elif tr.arc_type == "inhibitor":
+                        if tokens >= tr.weight:
+                            enabled = False
+            else:
+                # If the stored Transition object happens to be a post arc
+                # (Action -> State) when iterating transitions we still need
+                # to check pre-arcs for the action. So compute pre-arcs by
+                # scanning the net instead.
+                for pre in self.pre_arcs(tr.source.name if isinstance(tr.source, Action) else tr.target.name):
+                    # pre is an arc feeding an action; only consider those
+                    src_idx = state_index.get(pre.source.name)
+                    if src_idx is None:
+                        enabled = False
+                        break
+                    tokens = output_matrix[src_idx]
+                    if pre.arc_type in ("normal", "read"):
+                        if tokens < pre.weight:
+                            enabled = False
+                            break
+                    elif pre.arc_type == "inhibitor":
+                        if tokens >= pre.weight:
+                            enabled = False
+                            break
+
+            enabled_list.append(enabled)
+
+        return enabled_list
+        
 
     def list_enabled_actions(self):
         """Names of all actions currently enabled under the net's marking."""
@@ -562,6 +844,10 @@ class PETRI:
             data = json.load(f)
         return cls.from_dict(data)
 
+    @staticmethod  # TODO: tree node for the tree class. With n children per node (n = transition num) 
+    def Node(mother,childer:list):
+        pass
+
 
 class Simulation:
     """Thin wrapper around the net's firing primitives (`PETRI.is_enabled`
@@ -594,7 +880,6 @@ class Simulation:
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
-
 if __name__ == "__main__":
 
     Petri = PETRI("My Petri Net")

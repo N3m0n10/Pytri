@@ -1,0 +1,27 @@
+---------------PAST---------------
+##### BASE #####
+
+Implementação básica das classes e funções em petri.py
+
+Na versão atual:
+- Entidades de Petry
+- Matrix 
+- Disparar transições manualmente
+- CLI básico
+- Exportar em JSON
+
+A partir disso:
+- Ponte via FLASK para GUI via navegador
+  - feito com auxílio de LLM "CLaude"
+- Na GUI -> renaming, tabela de matrix
+
+E para github pages:
+- Tradução do projeto Flask para CSS,JS,HTML por CHATGPT
+- Correções como não sobreção de linha, alinhamento
+- Visão separada de matrix
+- Versão mobile
+
+--------------18/09/26--------------
+##### TREE ##### 
+
+Implementação de árvore de alcançabilidade/cobertura

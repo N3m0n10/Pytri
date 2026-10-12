@@ -1,0 +1,118 @@
+{
+  "name": "Untitled Net",
+  "states": [
+    {
+      "name": "p1",
+      "description": "",
+      "ficha_count": 2,
+      "x": 118.8888931274414,
+      "y": 95.16667938232422,
+      "rotation": 0,
+      "label_dx": -47,
+      "label_dy": 25
+    },
+    {
+      "name": "p2",
+      "description": "",
+      "ficha_count": 3,
+      "x": 118.8888931274414,
+      "y": 334.45947265625,
+      "rotation": 0,
+      "label_dx": -50.64563751220703,
+      "label_dy": -7.43243408203125
+    },
+    {
+      "name": "p3",
+      "description": "",
+      "ficha_count": 0,
+      "x": 240.54055786132812,
+      "y": 95.16667938232422,
+      "rotation": 0,
+      "label_dx": 70.94595336914062,
+      "label_dy": 16.319808959960938
+    }
+  ],
+  "actions": [
+    {
+      "name": "t1",
+      "description": "",
+      "enum": 0,
+      "x": 118.8888931274414,
+      "y": 210.81082153320312,
+      "rotation": 90,
+      "label_dx": -43.21320343017578,
+      "label_dy": 2.70269775390625
+    },
+    {
+      "name": "t2",
+      "description": "",
+      "enum": 1,
+      "x": 240.54055786132812,
+      "y": 210.81082153320312,
+      "rotation": 90,
+      "label_dx": 42.22224426269531,
+      "label_dy": 5.5555572509765625
+    }
+  ],
+  "transitions": [
+    {
+      "name": "a1",
+      "description": "",
+      "source": "p1",
+      "target": "t1",
+      "weight": 1,
+      "arc_type": "normal",
+      "label_dx": 6,
+      "label_dy": -6
+    },
+    {
+      "name": "a2",
+      "description": "",
+      "source": "t1",
+      "target": "p2",
+      "weight": 1,
+      "arc_type": "normal",
+      "label_dx": 6,
+      "label_dy": -6
+    },
+    {
+      "name": "a3",
+      "description": "",
+      "source": "p2",
+      "target": "t2",
+      "weight": 1,
+      "arc_type": "normal",
+      "label_dx": 11.006281662539834,
+      "label_dy": 15.7171798242762
+    },
+    {
+      "name": "a4",
+      "description": "",
+      "source": "t2",
+      "target": "p1",
+      "weight": 1,
+      "arc_type": "normal",
+      "label_dx": 8.592304950594638,
+      "label_dy": -5.620804688149349
+    },
+    {
+      "name": "a5",
+      "description": "",
+      "source": "t2",
+      "target": "p3",
+      "weight": 1,
+      "arc_type": "normal",
+      "label_dx": 6,
+      "label_dy": -6
+    }
+  ],
+  "_editor": {
+    "renameBuffer": {
+      "state": [
+        "p4"
+      ],
+      "action": [],
+      "transition": []
+    }
+  }
+}
