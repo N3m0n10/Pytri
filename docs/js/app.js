@@ -449,6 +449,9 @@ document.getElementById('theme-toggle').onclick = () => {
 
 
 const matrixModal = document.getElementById('matrix-modal');
+const reachabilityModal = document.getElementById('reachability-modal');
+const REACHABILITY_MAX_STATES = 240;
+const REACHABILITY_MAX_DEPTH = 36;
 function openMatrices() {
   matrixOpen = true;
   matrixModal.hidden = false;
@@ -474,6 +477,243 @@ document.getElementById('matrix-output-tab').onclick = () => {
   document.getElementById('matrix-incidence-tab').classList.remove('active');
   renderMatrices();
 };
+
+function openReachability() {
+  reachabilityModal.hidden = false;
+  renderReachability();
+  document.getElementById('reachability-close').focus();
+}
+function closeReachability() { reachabilityModal.hidden = true; }
+document.getElementById('reachability-toggle').onclick = openReachability;
+document.getElementById('reachability-close').onclick = closeReachability;
+document.getElementById('reachability-backdrop').onclick = closeReachability;
+
+function computeReachability() {
+  const states = netData.states;
+  const stateIndex = new Map(states.map((state, index) => [state.name, index]));
+  const initialMarking = states.map(state => state.ficha_count);
+  const omegaAccelerationDisabled = netData.transitions.some(t => t.arc_type === 'inhibitor');
+  const root = { id: 0, parentId: null, action: null, marking: initialMarking, depth: 0 };
+  root.ancestorPath = [{ id: root.id, marking: root.marking }];
+  const nodes = [root];
+  let truncated = false;
+  const actionArcs = netData.actions.map(action => ({
+    action,
+    inputArcs: netData.transitions.filter(t =>
+      t.target === action.name && stateIndex.has(t.source)
+    ),
+    outputArcs: netData.transitions.filter(t =>
+      t.source === action.name && stateIndex.has(t.target)
+    )
+  }));
+
+  for (let queueIndex = 0; queueIndex < nodes.length; queueIndex++) {
+    const sourceNode = nodes[queueIndex];
+    if (sourceNode.terminal) continue;
+    for (const { action, inputArcs, outputArcs } of actionArcs) {
+      const enabled = inputArcs.every(arc => {
+        const tokens = sourceNode.marking[stateIndex.get(arc.source)];
+        return arc.arc_type === 'inhibitor'
+          ? tokens < arc.weight
+          : tokens >= arc.weight;
+      });
+      if (!enabled) continue;
+
+      if (nodes.length >= REACHABILITY_MAX_STATES || sourceNode.depth >= REACHABILITY_MAX_DEPTH) {
+        truncated = true;
+        continue;
+      }
+
+      const marking = sourceNode.marking.slice();
+      for (const arc of inputArcs) {
+        if (arc.arc_type === 'normal') marking[stateIndex.get(arc.source)] -= arc.weight;
+      }
+      for (const arc of outputArcs) marking[stateIndex.get(arc.target)] += arc.weight;
+
+      let changed = !omegaAccelerationDisabled;
+      while (changed) {
+        changed = false;
+        for (const ancestor of sourceNode.ancestorPath) {
+          const coversAncestor = marking.every((tokens, index) => tokens >= ancestor.marking[index]);
+          if (!coversAncestor) continue;
+          for (let index = 0; index < marking.length; index++) {
+            if (Number.isFinite(marking[index]) && marking[index] > ancestor.marking[index]) {
+              marking[index] = Infinity;
+              changed = true;
+            }
+          }
+        }
+      }
+
+      const repeatedAncestor = sourceNode.ancestorPath.find(ancestor =>
+        marking.every((tokens, index) => tokens === ancestor.marking[index])
+      );
+      const node = {
+        id: nodes.length,
+        parentId: sourceNode.id,
+        action: action.name,
+        marking,
+        depth: sourceNode.depth + 1,
+        terminal: repeatedAncestor ? 'repeat' : null,
+        repeatOf: repeatedAncestor?.id ?? null,
+        ancestorPath: sourceNode.ancestorPath.concat([{ id: nodes.length, marking }])
+      };
+      nodes.push(node);
+    }
+  }
+
+  const distinctMarkings = new Set(nodes.map(node =>
+    node.marking.map(tokens => tokens === Infinity ? 'w' : String(tokens)).join(',')
+  )).size;
+  return { nodes, distinctMarkings, truncated, omegaAccelerationDisabled };
+}
+
+function renderReachability() {
+  const content = document.getElementById('reachability-content');
+  const status = document.getElementById('reachability-status');
+  const { nodes, distinctMarkings, truncated, omegaAccelerationDisabled } = computeReachability();
+  const edges = nodes.filter(node => node.parentId !== null).map(node => ({
+    source: node.parentId,
+    target: node.id,
+    action: node.action
+  }));
+  const repeatCount = nodes.filter(node => node.terminal === 'repeat').length;
+  const placeOrder = netData.states.map(state => state.name).join(', ') || 'no places';
+  status.textContent = `${nodes.length} tree nodes · ${distinctMarkings} distinct markings · ${repeatCount} terminal repeats · ${edges.length} firings · Place order: ${placeOrder}${omegaAccelerationDisabled ? ' · Omega acceleration is disabled for inhibitor arcs.' : ''}${truncated ? ` · Stopped at ${REACHABILITY_MAX_STATES} nodes or depth ${REACHABILITY_MAX_DEPTH}; graph is incomplete.` : ''}`;
+
+  const layers = [];
+  for (const node of nodes) (layers[node.depth] ||= []).push(node);
+  const nodeWidth = 184, nodeHeight = 78, gapX = 104, gapY = 32, margin = 32;
+  const graphWidth = margin * 2 + layers.length * nodeWidth + Math.max(0, layers.length - 1) * gapX;
+  const tallestLayer = Math.max(1, ...layers.map(layer => layer.length));
+  const graphHeight = margin * 2 + tallestLayer * nodeHeight + (tallestLayer - 1) * gapY;
+  const positions = new Map();
+  for (let depth = 0; depth < layers.length; depth++) {
+    layers[depth].forEach((node, row) => positions.set(node.id, {
+      x: margin + depth * (nodeWidth + gapX),
+      y: margin + row * (nodeHeight + gapY)
+    }));
+  }
+
+  const graph = document.createElementNS(svg.namespaceURI, 'svg');
+  graph.classList.add('reachability-graph');
+  graph.setAttribute('viewBox', `0 0 ${graphWidth} ${graphHeight}`);
+  graph.setAttribute('width', graphWidth);
+  graph.setAttribute('height', graphHeight);
+  graph.setAttribute('role', 'img');
+  graph.setAttribute('aria-label', 'Coverability tree with markings as nodes and actions as directed edges');
+
+  const defs = document.createElementNS(svg.namespaceURI, 'defs');
+  const arrow = document.createElementNS(svg.namespaceURI, 'marker');
+  arrow.setAttribute('id', 'reachability-arrow');
+  arrow.setAttribute('viewBox', '0 0 8 8');
+  arrow.setAttribute('refX', '7');
+  arrow.setAttribute('refY', '4');
+  arrow.setAttribute('markerWidth', '7');
+  arrow.setAttribute('markerHeight', '7');
+  arrow.setAttribute('orient', 'auto');
+  const arrowHead = document.createElementNS(svg.namespaceURI, 'path');
+  arrowHead.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
+  arrowHead.classList.add('reachability-arrowhead');
+  arrow.appendChild(arrowHead);
+  defs.appendChild(arrow);
+  graph.appendChild(defs);
+
+  for (const edge of edges) {
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    const sameNode = edge.source === edge.target;
+    const startX = sameNode ? source.x + nodeWidth / 2 - 25 : source.x + nodeWidth;
+    const endX = sameNode ? source.x + nodeWidth / 2 + 25 : target.x;
+    const startY = sameNode ? source.y : source.y + nodeHeight / 2;
+    const endY = sameNode ? target.y : target.y + nodeHeight / 2;
+    let pathData, labelX, labelY;
+    if (sameNode) {
+      pathData = `M ${startX} ${startY} C ${startX - 35} ${startY - 66}, ${endX + 35} ${endY - 66}, ${endX} ${endY}`;
+      labelX = source.x + nodeWidth / 2;
+      labelY = source.y - 38;
+    } else if (endX > startX + 20) {
+      const bend = (endX - startX) * 0.45;
+      pathData = `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`;
+      labelX = (startX + endX) / 2;
+      labelY = (startY + endY) / 2 - 8;
+    } else {
+      const lift = 44 + Math.min(56, Math.abs(endY - startY) * 0.12);
+      pathData = `M ${startX} ${startY} C ${startX + 54} ${startY - lift}, ${endX - 54} ${endY - lift}, ${endX} ${endY}`;
+      labelX = (startX + endX) / 2;
+      labelY = Math.min(startY, endY) - lift - 5;
+    }
+    const path = document.createElementNS(svg.namespaceURI, 'path');
+    path.setAttribute('d', pathData);
+    path.classList.add('reachability-edge');
+    path.setAttribute('marker-end', 'url(#reachability-arrow)');
+    const title = document.createElementNS(svg.namespaceURI, 'title');
+    title.textContent = `M${edge.source} to M${edge.target} by ${edge.action}`;
+    path.appendChild(title);
+    graph.appendChild(path);
+
+    const edgeLabel = document.createElementNS(svg.namespaceURI, 'text');
+    edgeLabel.setAttribute('x', labelX);
+    edgeLabel.setAttribute('y', labelY);
+    edgeLabel.classList.add('reachability-edge-label');
+    edgeLabel.textContent = edge.action;
+    graph.appendChild(edgeLabel);
+  }
+
+  for (const node of nodes) {
+    const position = positions.get(node.id);
+    const group = document.createElementNS(svg.namespaceURI, 'g');
+    group.classList.add('reachability-node');
+    if (node.id === 0) group.classList.add('reachability-root');
+    if (node.terminal === 'repeat') group.classList.add('reachability-repeat');
+    const rect = document.createElementNS(svg.namespaceURI, 'rect');
+    rect.setAttribute('x', position.x);
+    rect.setAttribute('y', position.y);
+    rect.setAttribute('width', nodeWidth);
+    rect.setAttribute('height', nodeHeight);
+    rect.setAttribute('rx', '5');
+    group.appendChild(rect);
+
+    const nodeLabel = document.createElementNS(svg.namespaceURI, 'text');
+    nodeLabel.setAttribute('x', position.x + 12);
+    nodeLabel.setAttribute('y', position.y + 23);
+    nodeLabel.classList.add('reachability-node-id');
+    nodeLabel.textContent = `M${node.id}${node.id === 0 ? ' · initial' : ''}`;
+    group.appendChild(nodeLabel);
+
+    const markingLabel = document.createElementNS(svg.namespaceURI, 'text');
+    markingLabel.setAttribute('x', position.x + 12);
+    markingLabel.setAttribute('y', position.y + 43);
+    markingLabel.classList.add('reachability-marking');
+    markingLabel.textContent = `[${node.marking.map(tokens => tokens === Infinity ? 'w' : tokens).join(', ')}]`;
+    if (markingLabel.textContent.length > 22) {
+      markingLabel.setAttribute('textLength', nodeWidth - 24);
+      markingLabel.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+    }
+    const fullMarking = netData.states.map((state, index) =>
+      `${state.name}=${node.marking[index] === Infinity ? 'w' : node.marking[index]}`
+    ).join(', ');
+    const markingTitle = document.createElementNS(svg.namespaceURI, 'title');
+    markingTitle.textContent = fullMarking || 'Empty marking';
+    markingLabel.appendChild(markingTitle);
+    group.appendChild(markingLabel);
+
+    if (node.terminal === 'repeat') {
+      const terminalLabel = document.createElementNS(svg.namespaceURI, 'text');
+      terminalLabel.setAttribute('x', position.x + 12);
+      terminalLabel.setAttribute('y', position.y + 64);
+      terminalLabel.classList.add('reachability-terminal');
+      terminalLabel.textContent = `terminal · repeat of M${node.repeatOf}`;
+      group.appendChild(terminalLabel);
+    }
+    graph.appendChild(group);
+  }
+
+  const scroll = document.createElement('div');
+  scroll.className = 'reachability-scroll';
+  scroll.appendChild(graph);
+  content.replaceChildren(scroll);
+}
 
 function renderMatrices() {
   const content = document.getElementById('matrix-content');
@@ -1305,6 +1545,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!helpModal.hidden) { closeHelp(); return; }
     if (matrixOpen) { closeMatrices(); return; }
+    if (!reachabilityModal.hidden) { closeReachability(); return; }
     selected = null;
     arcSource = null;
     setMode('select');

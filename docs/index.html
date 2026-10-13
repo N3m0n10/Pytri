@@ -43,6 +43,7 @@
       <div class="group">
         <h2>View</h2>
         <button id="matrix-toggle">▦ Matrices</button>
+        <button id="reachability-toggle">↗ Check reachability</button>
       </div>
 
       <div id="hint">Click "Add Place" or "Add Transition", then click on the canvas to drop a node. Switch to "Add Arc" and click a source node then a target node to connect them. Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.</div>
@@ -86,6 +87,16 @@
       </div>
       <div id="matrix-content"></div>
       <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
+    </section>
+  </div>
+
+  <div id="reachability-modal" hidden>
+    <div id="reachability-backdrop"></div>
+    <section id="reachability-dialog" role="dialog" aria-modal="true" aria-labelledby="reachability-title">
+      <button id="reachability-close" class="modal-close" aria-label="Close reachability graph">×</button>
+      <h2 id="reachability-title">↗ Reachability</h2>
+      <div id="reachability-status" class="matrix-help" aria-live="polite"></div>
+      <div id="reachability-content"></div>
     </section>
   </div>
 
