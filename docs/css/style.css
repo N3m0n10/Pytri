@@ -783,3 +783,27 @@ body:has(#export-modal:not([hidden]), #settings-modal:not([hidden]), #help-modal
          #matrix-modal:not([hidden]), #reachability-modal:not([hidden])) .entity-options-btn {
   display: none !important;
 }
+
+/* An author display rule would otherwise beat the [hidden] attribute */
+#inspector[hidden] { display: none; }
+
+/* Transition short description (drawn on the graph) */
+.node-label.short-desc { font-size: 11px; font-style: italic; fill: var(--muted); }
+#inspector input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--accent); }
+#inspector .row.check { gap: 8px; font-size: 12.5px; cursor: pointer; }
+#inspector .row > label[for] { min-width: 42px; }
+
+/* Arc hit area + spline reshaping handles */
+.arc path.arc-hit { stroke: transparent; stroke-width: 14px; filter: none; }
+#svg[data-arc-shape="spline"] .arc path.arc-hit { cursor: grab; }
+#svg[data-arc-shape="spline"] .arc path.arc-hit:active { cursor: grabbing; }
+.curve-tether {
+  stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3;
+  opacity: .8; pointer-events: none;
+}
+.curve-handle {
+  fill: var(--surface); stroke: var(--accent); stroke-width: 2;
+  cursor: grab; transition: fill .12s ease;
+}
+.curve-handle:hover { fill: var(--accent-soft); }
+.curve-handle:active { cursor: grabbing; }

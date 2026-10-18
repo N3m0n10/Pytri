@@ -7,10 +7,12 @@ const svg = document.getElementById('svg');
 const arcsLayer = document.getElementById('arcs-layer');
 const guidesLayer = document.getElementById('guides-layer');
 const nodesLayer = document.getElementById('nodes-layer');
+const handlesLayer = document.getElementById('handles-layer');
 const hint = document.getElementById('hint');
 const errorBox = document.getElementById('error');
 const inspector = document.getElementById('inspector');
 const STORAGE_KEY = 'pytri-net-v1';
+const SHORT_DESC_DEFAULT_DY = 64;   // just below the transition's name label (at +46)
 const SETTINGS_KEY = 'pytri-settings-v1';
 
 // Settings ------------------------------------------------------------------
@@ -34,6 +36,24 @@ const SETTINGS_SCHEMA = [
         value: 'renumber',
         label: 'Rename the places below it',
         description: 'Higher-numbered places shift down to close the gap, lowest first (deleting p2 turns p3 into p2, p4 into p3, ...).'
+      }
+    ]
+  },
+  {
+    key: 'arcShape',
+    type: 'choice',
+    label: 'Arc shape',
+    default: 'straight',
+    options: [
+      {
+        value: 'straight',
+        label: 'Straight lines',
+        description: 'Arcs are straight. Only two opposite arcs between the same pair of nodes are bent apart.'
+      },
+      {
+        value: 'spline',
+        label: 'Smooth splines',
+        description: 'Arcs are drawn as smooth curves that leave and enter nodes perpendicular to their edge. Drag a selected arc, or its two handles, to reshape it.'
       }
     ]
   }
@@ -64,11 +84,15 @@ let arcSource = null;
 let selected = null;
 let dragging = null;
 let draggingLabel = null;
+let draggingCurve = null;   // reshaping a spline arc: its handles or the curve body
 let panning = null;
 let dragMoved = false;
 let matrixView = 'incidence';
 let matrixOpen = false;
+// Whether the options panel (inspector) is open. Despite the legacy name this
+// drives both layouts: the bottom sheet on mobile and the sidebar panel on desktop.
 let mobileInspectorOpen = false;
+const isMobileLayout = () => window.matchMedia('(max-width: 700px)').matches;
 
 const MAX_HISTORY = 80;
 let history = [];
@@ -265,6 +289,23 @@ function loadLocal() {
   }
 }
 
+// A hand-shaped spline arc stores how far each Bezier control point was dragged
+// away from its automatic position, so the shape follows when nodes move.
+function normalizeCurve(curve) {
+  if (!curve) return null;
+  const v = [curve.c1x, curve.c1y, curve.c2x, curve.c2y].map(Number);
+  if (!v.every(Number.isFinite) || v.every(n => n === 0)) return null;
+  return { c1x: v[0], c1y: v[1], c2x: v[2], c2y: v[3] };
+}
+
+// Bend points of a straight arc ("broken" line): absolute canvas positions.
+function normalizePoints(points) {
+  if (!Array.isArray(points)) return [];
+  return points
+    .map(p => ({ x: Number(p?.x), y: Number(p?.y) }))
+    .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+}
+
 function normalizeNet(data) {
   const n = emptyNet(data?.name || 'Untitled Net');
   const legacyFormat = !Array.isArray(data?.arcs);
@@ -289,7 +330,13 @@ function normalizeNet(data) {
     y: Number(transition.y ?? 80),
     rotation: Number(transition.rotation ?? 0),
     label_dx: Number(transition.label_dx ?? 0),
-    label_dy: Number(transition.label_dy ?? 46)
+    label_dy: Number(transition.label_dy ?? 46),
+    // Optional one-line caption that can be drawn on the graph. It is separate
+    // from `description`, which is never drawn.
+    short_description: String(transition.short_description ?? ''),
+    show_short_description: transition.show_short_description === true,
+    short_dx: Number(transition.short_dx ?? 0),
+    short_dy: Number(transition.short_dy ?? SHORT_DESC_DEFAULT_DY)
   })) : [];
   n.arcs = Array.isArray(arcData) ? arcData.map((arc, i) => ({
     name: String(arc.name ?? `a${i + 1}`),
@@ -299,7 +346,9 @@ function normalizeNet(data) {
     weight: Math.max(1, parseInt(arc.weight ?? 1, 10) || 1),
     arc_type: ['normal', 'inhibitor', 'read'].includes(arc.arc_type) ? arc.arc_type : 'normal',
     label_dx: Number(arc.label_dx ?? 6),
-    label_dy: Number(arc.label_dy ?? -6)
+    label_dy: Number(arc.label_dy ?? -6),
+    curve: normalizeCurve(arc.curve),
+    points: normalizePoints(arc.points)
   })) : [];
   n.counters = {
     state: Number(data?.counters?.state ?? 0),
@@ -365,7 +414,9 @@ function addTransition(name, description, x, y) {
   commitName('transition', name);
   netData.transitions.push({
     name, description, enum: netData.transitions.length, type: 'normal', x, y,
-    rotation: 0, label_dx: 0, label_dy: 46
+    rotation: 0, label_dx: 0, label_dy: 46,
+    short_description: '', show_short_description: false,
+    short_dx: 0, short_dy: SHORT_DESC_DEFAULT_DY
   });
   saveLocal(); render();
 }
@@ -388,7 +439,7 @@ function addArc(name, description, source, target, weight, arc_type) {
   commitName('arc', name);
   netData.arcs.push({
     name, description, source, target, weight, arc_type,
-    label_dx: 6, label_dy: -6
+    label_dx: 6, label_dy: -6, curve: null, points: []
   });
   saveLocal(); render();
 }
@@ -1006,7 +1057,7 @@ const sidebar = document.getElementById('sidebar');
 canvasWrap.addEventListener('pointerdown', e => {
   // Se o clique/toque foi em um elemento interativo do SVG, não inicia o Pan
   // (nor on floating buttons, so a click on them is never turned into a pan)
-  if (e.target.closest('[data-name], button')) return;
+  if (e.target.closest('[data-name], [data-handle], button')) return;
 
   panning = {
     pointerId: e.pointerId,
@@ -1055,15 +1106,33 @@ function startDragNode(e) {
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
 
+  // Grab the pressed element before selectNode() re-renders (and detaches) it.
+  const labelEl = e.target;
+  const isLabel = labelEl.dataset.role === 'label';
+  const pressPoint = svgPoint(e);
+
   // Select entity immediately so the inspector opens with rename, delete, tokens, etc.
   selectNode(hit.dataset.kind, hit.dataset.name);
 
   pressedEntity = true;
   dragMoved = false;
-  const isLabel = e.target.dataset.role === 'label';
 
   if (isLabel) {
-    draggingLabel = { kind: hit.dataset.kind, name: hit.dataset.name };
+    // Remember where inside the text it was grabbed so it follows the pointer
+    // without jumping.
+    const pt = pressPoint;
+    const ax = parseFloat(labelEl.getAttribute('x')), ay = parseFloat(labelEl.getAttribute('y'));
+    draggingLabel = {
+      kind: hit.dataset.kind,
+      name: hit.dataset.name,
+      part: labelEl.dataset.part || 'name',
+      grabX: pt.x - ax,
+      grabY: pt.y - ay
+    };
+  } else if (hit.dataset.kind === 'arc' && settings.arcShape === 'spline') {
+    // Spline mode: dragging the arc reshapes it.
+    const arc = netData.arcs.find(item => item.name === hit.dataset.name);
+    if (arc) startCurveBodyDrag(arc, pressPoint);
   } else {
     dragging = hit.dataset.name;
   }
@@ -1076,20 +1145,27 @@ nodesLayer.addEventListener('pointerdown', startDragNode);
 arcsLayer.addEventListener('pointerdown', startDragNode);
 
 // Auto-alignment & distance helpers ---------------------------------------
-function calculateAlignmentGuides(currentNode, targetX, targetY) {
+// Snaps (targetX, targetY) to the reference points and returns the guides to draw.
+//   * Nodes: called with just the node; it aligns to the other nodes' centres.
+//   * Texts: called with opts.alignPoints (other texts + node centres) and
+//     opts.spacingPoints (other texts), all as {x, y} visual centres.
+function calculateAlignmentGuides(currentNode, targetX, targetY, opts = {}) {
   const SNAP_THRESHOLD = 7;
   let snappedX = targetX;
   let snappedY = targetY;
   const guides = [];
 
-  const allNodes = [...netData.states, ...netData.transitions].filter(n => n.name !== currentNode.name);
-  if (!allNodes.length) return { snappedX, snappedY, guides };
+  const otherNodes = [...netData.states, ...netData.transitions]
+    .filter(n => n.name !== currentNode?.name);
+  const alignPoints = opts.alignPoints ?? otherNodes;
+  const spacingPoints = opts.spacingPoints ?? alignPoints;
+  if (!alignPoints.length && !spacingPoints.length) return { snappedX, snappedY, guides };
 
   let snapXFound = false;
   let snapYFound = false;
 
   // 1. Check Center Alignment (X & Y axis alignment)
-  for (const other of allNodes) {
+  for (const other of alignPoints) {
     if (!snapXFound && Math.abs(targetX - other.x) < SNAP_THRESHOLD) {
       snappedX = other.x;
       snapXFound = true;
@@ -1113,8 +1189,8 @@ function calculateAlignmentGuides(currentNode, targetX, targetY) {
   }
 
   // 2. Check Equal Spacing Alignment (horizontal & vertical distance matching)
-  if (allNodes.length >= 2) {
-    const sortedX = [...allNodes].sort((a, b) => a.x - b.x);
+  if (spacingPoints.length >= 2) {
+    const sortedX = [...spacingPoints].sort((a, b) => a.x - b.x);
     for (let i = 0; i < sortedX.length - 1; i++) {
       const n1 = sortedX[i];
       const n2 = sortedX[i + 1];
@@ -1143,7 +1219,7 @@ function calculateAlignmentGuides(currentNode, targetX, targetY) {
       }
     }
 
-    const sortedY = [...allNodes].sort((a, b) => a.y - b.y);
+    const sortedY = [...spacingPoints].sort((a, b) => a.y - b.y);
     for (let i = 0; i < sortedY.length - 1; i++) {
       const n1 = sortedY[i];
       const n2 = sortedY[i + 1];
@@ -1255,21 +1331,32 @@ svg.addEventListener('pointermove', e => {
     }
   }
 
-  if (!dragging && !draggingLabel) return;
+  if (!dragging && !draggingLabel && !draggingCurve) return;
 
   e.preventDefault();
   dragMoved = true;
 
+  if (draggingCurve) {
+    updateCurveDrag(pt);
+    render();
+    return;
+  }
+
   if (dragging) {
     const node = findNode(dragging);
     if (node) {
-      const snapResult = calculateAlignmentGuides(node, pt.x, pt.y);
+      const snapResult = e.altKey
+        ? { snappedX: pt.x, snappedY: pt.y, guides: [] }     // Alt: move freely
+        : calculateAlignmentGuides(node, pt.x, pt.y);
       node.x = Math.max(30, Math.min(BASE_WIDTH - 30, snapResult.snappedX));
       node.y = Math.max(30, Math.min(BASE_HEIGHT - 30, snapResult.snappedY));
       render();
       renderGuides(snapResult.guides);
     }
   } else if (draggingLabel) {
+    // Where the text's anchor should go, after grab offset and snapping.
+    const { anchorX, anchorY, guides } = snapLabelAnchor(draggingLabel, pt, e.altKey);
+
     if (draggingLabel.kind === 'arc') {
       const arc = netData.arcs.find(item => item.name === draggingLabel.name);
       if (arc) {
@@ -1278,29 +1365,73 @@ svg.addEventListener('pointermove', e => {
           const geometry = arcGeometry(arc);
           const mx = geometry ? geometry.midX : (s.x + tg.x) / 2;
           const my = geometry ? geometry.midY : (s.y + tg.y) / 2;
-          arc.label_dx = pt.x - mx;
-          arc.label_dy = pt.y - my;
+          arc.label_dx = anchorX - mx;
+          arc.label_dy = anchorY - my;
           render();
+          renderGuides(guides);
         }
       }
     } else {
       const node = findNode(draggingLabel.name);
       if (node) {
-        node.label_dx = pt.x - node.x;
-        node.label_dy = pt.y - node.y;
+        if (draggingLabel.part === 'short') {
+          node.short_dx = anchorX - node.x;
+          node.short_dy = anchorY - node.y;
+        } else {
+          node.label_dx = anchorX - node.x;
+          node.label_dy = anchorY - node.y;
+        }
         render();
+        renderGuides(guides);
       }
     }
   }
 });
 
+// Text position helper ------------------------------------------------------
+// Every draggable text (place/transition names, short descriptions, arc labels)
+// snaps by its visual centre to the centres of all other texts and of all
+// nodes, and to equal spacing between other texts - the same helper nodes use.
+function textElements() {
+  return [...nodesLayer.querySelectorAll('text[data-role="label"]'),
+          ...arcsLayer.querySelectorAll('text[data-role="label"]')];
+}
+function elementCenter(el) {
+  const b = el.getBBox();
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+function snapLabelAnchor(label, pt, noSnap = false) {
+  const el = textElements().find(item =>
+    item.dataset.name === label.name &&
+    item.dataset.kind === label.kind &&
+    (item.dataset.part || 'name') === label.part);
+
+  // Anchor following the pointer, keeping the original grab offset.
+  const wantX = pt.x - label.grabX, wantY = pt.y - label.grabY;
+  if (!el || noSnap) return { anchorX: wantX, anchorY: wantY, guides: [] };
+
+  const ax = parseFloat(el.getAttribute('x')), ay = parseFloat(el.getAttribute('y'));
+  const center = elementCenter(el);
+  const offX = center.x - ax, offY = center.y - ay;   // anchor -> visual centre
+
+  const textCenters = textElements().filter(item => item !== el).map(elementCenter);
+  const nodeCenters = [...netData.states, ...netData.transitions].map(n => ({ x: n.x, y: n.y }));
+  const snap = calculateAlignmentGuides(null, wantX + offX, wantY + offY, {
+    alignPoints: [...textCenters, ...nodeCenters],
+    spacingPoints: textCenters
+  });
+  return { anchorX: snap.snappedX - offX, anchorY: snap.snappedY - offY, guides: snap.guides };
+}
+
 const endDrag = e => {
-  if (dragging || draggingLabel) {
+  if (dragging || draggingLabel || draggingCurve) {
     try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     clearGuides();
     saveLocal();
     dragging = null;
     draggingLabel = null;
+    draggingCurve = null;
   }
 };
 
@@ -1330,8 +1461,13 @@ sidebar.addEventListener('wheel', e => {
 }, {passive: true});
 
 function selectNode(kind, name) {
+  const sameEntity = selected?.kind === kind && selected.name === name;
   selected = {kind, name};
-  mobileInspectorOpen = false;
+  if (isMobileLayout()) {
+    mobileInspectorOpen = false;          // sheet opens via the Options button
+  } else if (!sameEntity) {
+    mobileInspectorOpen = true;           // desktop: selecting a new entity opens its panel
+  }                                        // re-pressing the same one keeps ✕ / Options state
   render();
 }
 
@@ -1346,8 +1482,10 @@ function renderInspector() {
     return;
   }
 
-  inspector.hidden = false;
-  
+  // Desktop: the panel is shown only while open (✕ closes it, the Options
+  // button reopens it). Mobile visibility is handled by the .open-mobile CSS.
+  inspector.hidden = !isMobileLayout() && !mobileInspectorOpen;
+
   if (optionsBtn && nameSpan) {
     nameSpan.textContent = selected.name;
     optionsBtn.hidden = false;
@@ -1372,6 +1510,9 @@ function renderInspector() {
       </div>
       <div class="muted">${escapeHtml(t.source)} &rarr; ${escapeHtml(t.target)}
         (${canChooseType ? 'pre' : 'post'})</div>
+      ${settings.arcShape === 'spline' ? `
+        <div class="muted">Drag the curve or its handles to reshape it.</div>
+        ${t.curve ? '<button id="insp-reset-curve">↺ Reset curve</button>' : ''}` : ''}
       <div class="row"><label>Weight</label>
         <input id="insp-weight" type="number" min="1" value="${t.weight}"></div>
       ${canChooseType ? `
@@ -1394,6 +1535,8 @@ function renderInspector() {
       } catch (err) { showError(err.message); }
     };
     document.getElementById('insp-close').onclick = () => { mobileInspectorOpen = false; renderInspector(); };
+    const resetCurve = document.getElementById('insp-reset-curve');
+    if (resetCurve) resetCurve.onclick = () => { t.curve = null; saveLocal(); render(); };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
     document.getElementById('insp-delete').onclick = () => removeArc(t.name);
@@ -1412,7 +1555,13 @@ function renderInspector() {
     <div class="row"><label>Name</label>
       <input id="insp-name" value="${escapeAttr(node.name)}">
       <button id="insp-rename">Rename</button></div>
-    <textarea id="insp-desc" rows="2" placeholder="Description">${escapeHtml(node.description || '')}</textarea>
+    ${isState ? '' : `
+    <div class="row"><label for="insp-short">Short</label>
+      <input id="insp-short" maxlength="80" placeholder="Short description"
+             value="${escapeAttr(node.short_description || '')}"></div>
+    <label class="row check"><input type="checkbox" id="insp-short-show"
+      ${node.show_short_description ? 'checked' : ''}> Show short description on graph</label>`}
+    <textarea id="insp-desc" rows="2" placeholder="Description (not shown on graph)">${escapeHtml(node.description || '')}</textarea>
     ${isState ? `
       <div class="row"><label>Tokens: ${node.ficha_count}</label>
         <button id="insp-minus">–1</button><button id="insp-plus">+1</button></div>` :
@@ -1443,6 +1592,14 @@ function renderInspector() {
       try { addFicha(node.name, -1); } catch (err) { showError(err.message); }
     };
   } else {
+    document.getElementById('insp-short').onchange = e => {
+      node.short_description = e.target.value.trim();
+      saveLocal(); render();
+    };
+    document.getElementById('insp-short-show').onchange = e => {
+      node.show_short_description = e.target.checked;
+      saveLocal(); render();
+    };
     document.getElementById('insp-rotate').onclick = () => {
       node.rotation = ((node.rotation || 0) + 90) % 360;
       saveLocal(); render();
@@ -1465,7 +1622,88 @@ function escapeAttr(value) { return escapeHtml(value); }
 // When two opposite arcs connect the same pair of units, draw them as two
 // parallel lines. The second arc therefore does not point through the same
 // centre/boundary point as the first one.
-function arcGeometry(t) {
+// Unit vector pointing out of a node's surface at boundary point `p`: radial
+// for places, the normal of the side that was hit for (rotated) transitions.
+function outwardNormal(node, kind, p) {
+  const dx = p.x - node.x, dy = p.y - node.y;
+  if (kind === 'state') {
+    const d = Math.hypot(dx, dy) || 1;
+    return { x: dx / d, y: dy / d };
+  }
+  const rad = (node.rotation || 0) * Math.PI / 180;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c;       // world -> local
+  const local = Math.abs(lx) / 10 >= Math.abs(ly) / 30
+    ? { x: Math.sign(lx) || 1, y: 0 }
+    : { x: 0, y: Math.sign(ly) || 1 };
+  return { x: local.x * c - local.y * s, y: local.x * s + local.y * c };  // local -> world
+}
+
+// Smooth cubic Bezier ("spline") arc: it leaves the source and enters the target
+// along the surface normals, so arrowheads meet the node edge head-on.
+function splineArcGeometry(source, target, sourceKind, targetKind, bendOffset, curve) {
+  const dx = target.x - source.x, dy = target.y - source.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const nx = -dy / dist, ny = dx / dist;
+  const aimAtTarget = { x: target.x + nx * bendOffset, y: target.y + ny * bendOffset };
+  const aimAtSource = { x: source.x + nx * bendOffset, y: source.y + ny * bendOffset };
+
+  const p1 = boundaryPoint(source, sourceKind, aimAtTarget.x, aimAtTarget.y);
+  const p2 = boundaryPoint(target, targetKind, aimAtSource.x, aimAtSource.y);
+  const n1 = outwardNormal(source, sourceKind, p1);
+  const n2 = outwardNormal(target, targetKind, p2);
+
+  const k = Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.4;
+  // Automatic control points, then the user's drag offsets (if any) on top.
+  const auto1 = { x: p1.x + n1.x * k, y: p1.y + n1.y * k };
+  const auto2 = { x: p2.x + n2.x * k, y: p2.y + n2.y * k };
+  const c1 = curve ? { x: auto1.x + curve.c1x, y: auto1.y + curve.c1y } : auto1;
+  const c2 = curve ? { x: auto2.x + curve.c2x, y: auto2.y + curve.c2y } : auto2;
+
+  return {
+    p1, p2, control: c1, control2: c2, auto1, auto2,
+    path: `M ${p1.x} ${p1.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${p2.x} ${p2.y}`,
+    // Cubic Bezier point at t = 0.5, used as the label anchor.
+    midX: 0.125 * p1.x + 0.375 * c1.x + 0.375 * c2.x + 0.125 * p2.x,
+    midY: 0.125 * p1.y + 0.375 * c1.y + 0.375 * c2.y + 0.125 * p2.y
+  };
+}
+
+// Straight arc that was broken into segments by the user: source -> bend points
+// -> target. The ends leave the nodes toward the first/last bend point.
+function polylineArcGeometry(source, target, sourceKind, targetKind, points) {
+  const first = points[0], last = points[points.length - 1];
+  const p1 = boundaryPoint(source, sourceKind, first.x, first.y);
+  const p2 = boundaryPoint(target, targetKind, last.x, last.y);
+  const polyline = [p1, ...points, p2];
+
+  // Label anchor: the point halfway along the whole path.
+  const lengths = [];
+  let total = 0;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const len = Math.hypot(polyline[i + 1].x - polyline[i].x, polyline[i + 1].y - polyline[i].y);
+    lengths.push(len); total += len;
+  }
+  let remaining = total / 2, midX = p1.x, midY = p1.y;
+  for (let i = 0; i < lengths.length; i++) {
+    if (remaining <= lengths[i] || i === lengths.length - 1) {
+      const f = lengths[i] ? remaining / lengths[i] : 0;
+      midX = polyline[i].x + (polyline[i + 1].x - polyline[i].x) * f;
+      midY = polyline[i].y + (polyline[i + 1].y - polyline[i].y) * f;
+      break;
+    }
+    remaining -= lengths[i];
+  }
+
+  return {
+    p1, p2, polyline,
+    path: 'M ' + polyline.map(q => `${q.x} ${q.y}`).join(' L '),
+    midX, midY
+  };
+}
+
+// opts.ignoreCurve: geometry without the user's drag offsets (used to compute them).
+function arcGeometry(t, opts = {}) {
   const source = findNode(t.source), target = findNode(t.target);
   const sourceKind = nodeKind(t.source), targetKind = nodeKind(t.target);
   if (!source || !target) return null;
@@ -1473,6 +1711,18 @@ function arcGeometry(t) {
   const reverse = netData.arcs.find(other =>
     other !== t && other.source === t.target && other.target === t.source
   );
+
+  // Spline mode: every arc is a smooth curve; a pair of opposite arcs bows
+  // apart symmetrically instead of one staying straight.
+  if (settings.arcShape === 'spline') {
+    return splineArcGeometry(source, target, sourceKind, targetKind, reverse ? 24 : 0,
+      opts.ignoreCurve ? null : t.curve);
+  }
+
+  // Straight mode, but the user broke the line with bend points.
+  if (t.points?.length) {
+    return polylineArcGeometry(source, target, sourceKind, targetKind, t.points);
+  }
 
   // Keep the first direction straight. If the reverse direction exists,
   // route it around the connection instead of sending both arrows through
@@ -1539,6 +1789,13 @@ function render() {
     g.classList.add('arc');
     g.dataset.name = t.name; g.dataset.kind = 'arc';
 
+    // Invisible, wider twin of the line: makes thin arcs easy to click and drag.
+    const hitPath = document.createElementNS(svg.namespaceURI, 'path');
+    hitPath.setAttribute('d', geometry.path);
+    hitPath.setAttribute('class', 'arc-hit');
+    hitPath.dataset.name = t.name; hitPath.dataset.kind = 'arc';
+    g.appendChild(hitPath);
+
     const line = document.createElementNS(svg.namespaceURI, 'path');
     line.setAttribute('d', geometry.path);
     line.setAttribute('class', 'type-' + t.arc_type +
@@ -1554,6 +1811,7 @@ function render() {
     label.setAttribute('y', midY + (t.label_dy ?? -6));
     label.setAttribute('class', 'arc-label');
     label.dataset.name = t.name; label.dataset.kind = 'arc'; label.dataset.role = 'label';
+    label.dataset.part = 'name';
     label.textContent = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
     g.appendChild(label);
     arcsLayer.appendChild(g);
@@ -1580,7 +1838,7 @@ function render() {
     g.innerHTML = `
       <circle cx="${s.x}" cy="${s.y}" r="30" class="${isSel?'selected':''}"></circle>
       <text class="node-label" data-name="${escapeAttr(s.name)}" data-kind="state"
-            data-role="label" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(s.name)}</text>
+            data-role="label" data-part="name" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(s.name)}</text>
       ${s.ficha_count > 0 ? `<text class="tokens" x="${s.x}" y="${s.y+5}" text-anchor="middle">${s.ficha_count}</text>` : ''}`;
     nodesLayer.appendChild(g);
   }
@@ -1597,12 +1855,217 @@ function render() {
       <rect x="${a.x-10}" y="${a.y-30}" width="20" height="60" class="${classes}"
             transform="rotate(${rotation} ${a.x} ${a.y})"></rect>
       <text class="node-label" data-name="${escapeAttr(a.name)}" data-kind="transition"
-            data-role="label" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(a.name)}</text>`;
+            data-role="label" data-part="name" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(a.name)}</text>
+      ${a.show_short_description && a.short_description ? `
+      <text class="node-label short-desc" data-name="${escapeAttr(a.name)}" data-kind="transition"
+            data-role="label" data-part="short" x="${a.x + (a.short_dx ?? 0)}"
+            y="${a.y + (a.short_dy ?? SHORT_DESC_DEFAULT_DY)}" text-anchor="middle">${escapeHtml(a.short_description)}</text>` : ''}`;
     nodesLayer.appendChild(g);
   }
 
+  renderCurveHandles();
   renderInspector();
   if (matrixOpen) renderMatrices();
+}
+
+// Straight mode: the selected arc shows its bend points (solid) and a ghost
+// handle at the middle of every segment (drag it to break the line there).
+function renderBendHandles(arc, geometry) {
+  const polyline = geometry.polyline || [geometry.p1, geometry.p2];
+  const add = (cls, x, y, r, handle, index) => {
+    const dot = document.createElementNS(svg.namespaceURI, 'circle');
+    dot.setAttribute('class', cls);
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', r);
+    dot.dataset.handle = handle; dot.dataset.arc = arc.name; dot.dataset.index = index;
+    handlesLayer.appendChild(dot);
+  };
+  for (let i = 0; i < polyline.length - 1; i++) {
+    add('curve-ghost', (polyline[i].x + polyline[i + 1].x) / 2,
+        (polyline[i].y + polyline[i + 1].y) / 2, 5, 'ghost', i);
+  }
+  (arc.points || []).forEach((q, i) => add('curve-handle', q.x, q.y, 7, 'v', i));
+}
+
+// Spline mode: the selected arc shows its two Bezier control points as handles.
+function renderCurveHandles() {
+  handlesLayer.innerHTML = '';
+  svg.dataset.arcShape = settings.arcShape;
+  if (mode !== 'select' || selected?.kind !== 'arc') return;
+  const arc = netData.arcs.find(item => item.name === selected.name);
+  const geometry = arc && arcGeometry(arc);
+  if (!geometry) return;
+  if (settings.arcShape !== 'spline') { renderBendHandles(arc, geometry); return; }
+  if (!geometry.control2) return;
+
+  for (const [anchor, control, which] of [
+    [geometry.p1, geometry.control, 'c1'],
+    [geometry.p2, geometry.control2, 'c2']
+  ]) {
+    const tether = document.createElementNS(svg.namespaceURI, 'line');
+    tether.setAttribute('class', 'curve-tether');
+    tether.setAttribute('x1', anchor.x); tether.setAttribute('y1', anchor.y);
+    tether.setAttribute('x2', control.x); tether.setAttribute('y2', control.y);
+    handlesLayer.appendChild(tether);
+
+    const handle = document.createElementNS(svg.namespaceURI, 'circle');
+    handle.setAttribute('class', 'curve-handle');
+    handle.setAttribute('cx', control.x); handle.setAttribute('cy', control.y);
+    handle.setAttribute('r', 7);
+    handle.dataset.handle = which; handle.dataset.arc = arc.name;
+    handlesLayer.appendChild(handle);
+  }
+}
+
+// Curve reshaping ------------------------------------------------------------
+function cubicPoint(g, t) {
+  const u = 1 - t;
+  return {
+    x: u*u*u*g.p1.x + 3*u*u*t*g.control.x + 3*u*t*t*g.control2.x + t*t*t*g.p2.x,
+    y: u*u*u*g.p1.y + 3*u*u*t*g.control.y + 3*u*t*t*g.control2.y + t*t*t*g.p2.y
+  };
+}
+function nearestCurveT(g, pt) {
+  let best = 0.5, bestDist = Infinity;
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60, p = cubicPoint(g, t);
+    const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+    if (d < bestDist) { bestDist = d; best = t; }
+  }
+  return best;
+}
+
+// Press on a handle: move that one control point.
+function startHandleDrag(e) {
+  const handle = e.target.closest('[data-handle]');
+  if (!handle || mode !== 'select') return;
+  const arc = netData.arcs.find(item => item.name === handle.dataset.arc);
+  if (arc && (handle.dataset.handle === 'v' || handle.dataset.handle === 'ghost')) {
+    startBendHandleDrag(e, arc, handle);
+    return;
+  }
+  const geometry = arc && arcGeometry(arc);
+  if (!geometry?.control2) return;
+  const pt = svgPoint(e);
+  const control = handle.dataset.handle === 'c1' ? geometry.control : geometry.control2;
+  draggingCurve = {
+    arc: arc.name, kind: handle.dataset.handle,
+    grabX: pt.x - control.x, grabY: pt.y - control.y
+  };
+  pressedEntity = true;       // swallow the click that ends this press
+  dragMoved = false;
+  try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+}
+handlesLayer.addEventListener('pointerdown', startHandleDrag);
+
+// Straight arcs ("break the line") ------------------------------------------
+const BREAK_DRAG_THRESHOLD = 4;          // px of movement before a bend point is created
+const DOUBLE_PRESS_MS = 350;
+let lastBendPress = { arc: null, index: -1, time: 0 };
+
+// Press on a bend point (move it; press twice quickly to remove it) or on a
+// ghost handle (drag to create a bend point in that segment).
+function startBendHandleDrag(e, arc, handle) {
+  const pt = svgPoint(e);
+  const index = Number(handle.dataset.index);
+  pressedEntity = true;                  // swallow the click that ends this press
+  dragMoved = false;
+
+  if (handle.dataset.handle === 'ghost') {
+    draggingCurve = { arc: arc.name, kind: 'break', seg: index, start: pt };
+  } else {
+    const now = performance.now();
+    if (lastBendPress.arc === arc.name && lastBendPress.index === index &&
+        now - lastBendPress.time < DOUBLE_PRESS_MS) {
+      arc.points.splice(index, 1);       // double press: remove this bend point
+      lastBendPress = { arc: null, index: -1, time: 0 };
+      saveLocal(); render();
+      return;
+    }
+    lastBendPress = { arc: arc.name, index, time: now };
+    const q = arc.points[index];
+    draggingCurve = { arc: arc.name, kind: 'v', index, grabX: pt.x - q.x, grabY: pt.y - q.y };
+  }
+  try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+// Press on the line itself: once it is dragged, break it at the nearest segment.
+function startBreakDrag(arc, pressPoint) {
+  const geometry = arcGeometry(arc);
+  if (!geometry) return;
+  const line = geometry.polyline || [geometry.p1, geometry.p2];
+  let seg = 0, best = Infinity;
+  for (let i = 0; i < line.length - 1; i++) {
+    const a = line[i], b = line[i + 1];
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const len2 = abx * abx + aby * aby || 1;
+    const f = Math.max(0, Math.min(1, ((pressPoint.x - a.x) * abx + (pressPoint.y - a.y) * aby) / len2));
+    const d = Math.hypot(pressPoint.x - (a.x + abx * f), pressPoint.y - (a.y + aby * f));
+    if (d < best) { best = d; seg = i; }
+  }
+  draggingCurve = { arc: arc.name, kind: 'break', seg, start: pressPoint };
+}
+
+// Snap a bend point to node centres and to other bend points, so segments can
+// be made perfectly horizontal / vertical. Alt disables it.
+function snapBendPoint(arc, index, x, y, noSnap) {
+  if (noSnap) return { x, y, guides: [] };
+  const alignPoints = [
+    ...[...netData.states, ...netData.transitions].map(n => ({ x: n.x, y: n.y })),
+    ...netData.arcs.flatMap(a => (a.points || [])
+      .filter((_, i) => !(a === arc && i === index)))
+  ];
+  const snap = calculateAlignmentGuides(null, x, y, { alignPoints, spacingPoints: [] });
+  return { x: snap.snappedX, y: snap.snappedY, guides: snap.guides };
+}
+
+function updateBendDrag(arc, pt, noSnap) {
+  const d = draggingCurve;
+  if (d.kind === 'break') {
+    if (Math.hypot(pt.x - d.start.x, pt.y - d.start.y) < BREAK_DRAG_THRESHOLD) return [];
+    arc.points = arc.points || [];
+    arc.points.splice(d.seg, 0, { x: pt.x, y: pt.y });   // the line breaks here
+    Object.assign(d, { kind: 'v', index: d.seg, grabX: 0, grabY: 0 });
+  }
+  const snapped = snapBendPoint(arc, d.index, pt.x - d.grabX, pt.y - d.grabY, noSnap);
+  arc.points[d.index] = { x: snapped.x, y: snapped.y };
+  return snapped.guides;
+}
+
+// Press on the curve itself: bend it so the grabbed point follows the pointer.
+function startCurveBodyDrag(arc, pressPoint) {
+  const geometry = arcGeometry(arc);
+  if (!geometry?.control2) return;
+  // Clamp so grabbing very near an end doesn't need absurdly large offsets.
+  const t = Math.min(0.88, Math.max(0.12, nearestCurveT(geometry, pressPoint)));
+  draggingCurve = {
+    arc: arc.name, kind: 'body', start: pressPoint, t,
+    base: arc.curve ? { ...arc.curve } : { c1x: 0, c1y: 0, c2x: 0, c2y: 0 }
+  };
+}
+
+// Returns the alignment guides to draw (only bend-point drags produce any).
+function updateCurveDrag(pt, noSnap = false) {
+  const d = draggingCurve;
+  const arc = netData.arcs.find(item => item.name === d.arc);
+  if (!arc) return [];
+  if (d.kind === 'break' || d.kind === 'v') return updateBendDrag(arc, pt, noSnap);
+  const auto = arcGeometry(arc, { ignoreCurve: true });
+  if (!auto?.auto1) return;
+  const cur = arc.curve || { c1x: 0, c1y: 0, c2x: 0, c2y: 0 };
+
+  if (d.kind === 'c1') {
+    arc.curve = { ...cur, c1x: pt.x - d.grabX - auto.auto1.x, c1y: pt.y - d.grabY - auto.auto1.y };
+  } else if (d.kind === 'c2') {
+    arc.curve = { ...cur, c2x: pt.x - d.grabX - auto.auto2.x, c2y: pt.y - d.grabY - auto.auto2.y };
+  } else {
+    // Moving both controls by D shifts the curve point at parameter t by 3t(1-t)D.
+    const k = 1 / (3 * d.t * (1 - d.t));
+    const dx = (pt.x - d.start.x) * k, dy = (pt.y - d.start.y) * k;
+    arc.curve = {
+      c1x: d.base.c1x + dx, c1y: d.base.c1y + dy,
+      c2x: d.base.c2x + dx, c2y: d.base.c2y + dy
+    };
+  }
 }
 
 loadLocal();
@@ -1659,7 +2122,7 @@ function renderSettings() {
         input.name = `setting-${def.key}`;
         input.value = option.value;
         input.checked = settings[def.key] === option.value;
-        input.onchange = () => { settings[def.key] = option.value; saveSettings(); };
+        input.onchange = () => { settings[def.key] = option.value; saveSettings(); render(); };
         const text = document.createElement('span');
         const title = document.createElement('b');
         title.textContent = option.label;
@@ -1678,7 +2141,7 @@ function renderSettings() {
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = !!settings[def.key];
-      input.onchange = () => { settings[def.key] = input.checked; saveSettings(); };
+      input.onchange = () => { settings[def.key] = input.checked; saveSettings(); render(); };
       const text = document.createElement('span');
       text.textContent = def.description || def.label;
       label.append(input, text);
@@ -1707,7 +2170,7 @@ const EXPORT_MAX_PIXELS = 16_000_000;
 const EXPORT_BACKGROUNDS = { transparent: null, white: '#ffffff', black: '#000000' };
 const EXPORT_STYLE_PROPS = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray',
   'stroke-linejoin', 'stroke-linecap', 'opacity', 'font-family', 'font-size',
-  'font-weight', 'text-anchor', 'paint-order'];
+  'font-style', 'font-weight', 'text-anchor', 'paint-order'];
 
 const exportModal = document.getElementById('export-modal');
 const exportPreview = document.getElementById('export-preview');
@@ -1732,6 +2195,8 @@ function buildExportSvg(theme) {
   holder.setAttribute('viewBox', `0 0 ${BASE_WIDTH} ${BASE_HEIGHT}`);
   holder.setAttribute('style', 'position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none');
   holder.querySelector('#guides-layer')?.remove();
+  holder.querySelector('#handles-layer')?.remove();
+  holder.querySelectorAll('.arc-hit').forEach(n => n.remove());
   holder.querySelector('#pending-arc')?.remove();
   holder.querySelectorAll('.selected').forEach(n => n.classList.remove('selected'));
   document.body.appendChild(holder);
@@ -2125,6 +2590,7 @@ if (canvasWrap) {
       // Cancel single finger dragging / panning while pinching
       dragging = null;
       draggingLabel = null;
+      draggingCurve = null;
       panning = null;
 
       const t1 = e.touches[0];
@@ -2171,6 +2637,9 @@ if (canvasWrap) {
     }
   }, { passive: true });
 }
+
+// Re-evaluate the panel when crossing the mobile/desktop breakpoint.
+window.matchMedia('(max-width: 700px)').addEventListener('change', () => renderInspector());
 
 // 4. Floating Entity Options Button Trigger
 const optionsBtn = document.getElementById('entity-options-btn') || document.getElementById('mobile-options-btn');

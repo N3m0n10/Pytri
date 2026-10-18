@@ -73,6 +73,7 @@
         <g id="arcs-layer"></g>
         <g id="guides-layer"></g>
         <g id="nodes-layer"></g>
+        <g id="handles-layer"></g>
       </svg>
       <button id="entity-options-btn" class="entity-options-btn" hidden>⚙ Options: <span id="selected-entity-name"></span></button>
     </section>
@@ -170,7 +171,7 @@
           <div>
             <article class="help-item"><span class="help-icon">◯</span><div><h3>Create elements</h3><p>Use the toolbar to add places, transitions and arcs. Click on the canvas to place an element.</p></div></article>
             <article class="help-item"><span class="help-icon">↗</span><div><h3>Connect elements</h3><p>Choose <b>Add Arc</b>, then click a source element and a target element. Configure the arc type and weight in the inspector.</p></div></article>
-            <article class="help-item"><span class="help-icon">✎</span><div><h3>Edit</h3><p>Select an element to move, rename, rotate or delete it. Drag labels independently to reposition them.</p></div></article>
+            <article class="help-item"><span class="help-icon">✎</span><div><h3>Edit</h3><p>Select an element to move, rename, rotate or delete it. Drag labels independently to reposition them. With Smooth splines on (Settings), drag an arc or its handles to reshape the curve.</p></div></article>
           </div>
           <div>
             <article class="help-item"><span class="help-icon">▦</span><div><h3>Matrices</h3><p>The incidence matrix describes the relation between places and arcs. The marking vector shows the current number of tokens in each place.</p></div></article>
@@ -194,6 +195,7 @@
           <div><kbd>Ctrl</kbd><span>+</span><kbd>0</kbd><span>Reset zoom (100%)</span></div>
           <div><kbd>Delete</kbd> / <kbd>Backspace</kbd><span>Delete selected element</span></div>
           <div><kbd>Space</kbd><span>Fire selected transition</span></div>
+          <div><kbd>Alt</kbd><span>+</span><span>drag</span><span>Move without snapping to guides</span></div>
           <div><kbd>Esc</kbd><span>Deselect / cancel</span></div>
         </div>
       </div>
