@@ -3,6 +3,9 @@ import numpy
 incidence_matrix = numpy.array([[1, 0, 0], [-1, 1, 0], [0, 1, -1], [-1, 0, 1]], dtype=int)
 output = numpy.array([1, 0, 0], dtype=int)
 
+Im2 = numpy.array([[-1, 1, 1, 0], [1, -1, 0, 0], [0, -1, 0, 1]], dtype=int)
+out2 = numpy.array([1, 0, 0, 0], dtype=int)
+
 def new_output(incidence_matrix, output, fired_vec):
     return numpy.dot(fired_vec,incidence_matrix) + output
 
@@ -84,6 +87,23 @@ print(output)
 result_tree = tree(incidence_matrix, output)
 print("Generated Tree of Markings:")
 for level_idx, level in enumerate(result_tree):
+    print(f"Level {level_idx}:")
+    for node_id, parent_id, transition, marking in level:
+        values = " ".join("w" if numpy.isinf(x) else str(int(x)) for x in marking)
+        father = "-" if parent_id is None else str(parent_id)
+        print(f"  - node {node_id}, father {father}, transition {transition}: x = [{values}]")
+
+print("\n\n\n")
+
+breakpoint()
+
+print("Incidence Matrix:")
+print(Im2)
+print("Initial Output:")
+print(out2)
+result_tree2 = tree(Im2, out2)
+print("Generated Tree of Markings:")
+for level_idx, level in enumerate(result_tree2):
     print(f"Level {level_idx}:")
     for node_id, parent_id, transition, marking in level:
         values = " ".join("w" if numpy.isinf(x) else str(int(x)) for x in marking)
