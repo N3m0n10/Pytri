@@ -13,7 +13,7 @@
     --accent: #b4552f;
     --accent-soft: #e9d9c9;
     --state-fill: #fdf6ec;
-    --action-fill: #2b2b2b;
+    --transition-fill: #2b2b2b;
     --arc: #6b6459;
     --danger: #a3372d;
     --enabled: #2f6f4f;
@@ -27,7 +27,7 @@
     --accent: #e08a5b;
     --accent-soft: #4a3b2c;
     --state-fill: #2a2722;
-    --action-fill: #e8e3d8;
+    --transition-fill: #e8e3d8;
     --arc: #a89f8f;
     --danger: #e2695c;
     --enabled: #4f9b73;
@@ -83,9 +83,9 @@
   .state circle.selected { stroke: var(--accent); stroke-width: 2.6; }
   .node-label { font-size: 12px; fill: var(--ink); cursor: move; }
   .state text.tokens { font-size: 13px; font-weight: 700; fill: var(--accent); pointer-events: none; }
-  .action rect { fill: var(--action-fill); }
-  .action rect.selected { stroke: var(--accent); stroke-width: 3px; }
-  .action rect.enabled { fill: var(--enabled); }
+  .transition rect { fill: var(--transition-fill); }
+  .transition rect.selected { stroke: var(--accent); stroke-width: 3px; }
+  .transition rect.enabled { fill: var(--enabled); }
   .arc-marker { fill: var(--arc); stroke: var(--arc); }
   .arc path { fill: none; stroke: var(--arc); stroke-width: 1.6; cursor: pointer; }
   .arc path.type-normal, .arc path.type-read { marker-end: url(#arrow); }
@@ -143,7 +143,7 @@
     <h2>Build</h2>
     <button id="mode-select" class="active">↖ Select / Move</button>
     <button id="mode-state">◯ Add Place (State)</button>
-    <button id="mode-action">▮ Add Transition (Action)</button>
+    <button id="mode-transition">▮ Add Transition</button>
     <button id="mode-arc">→ Add Arc</button>
   </div>
 
@@ -158,7 +158,7 @@
   <div class="group">
     <h2>Simulation</h2>
     <div class="placeholder-box">Simulation controls will live here — stepping,
-    firing enabled actions, and a run/pause loop are coming in a later milestone.</div>
+    firing enabled transitions, and a run/pause loop are coming in a later milestone.</div>
   </div>
 
   <div id="hint">Click "Add Place" or "Add Transition", then click on the
@@ -205,7 +205,7 @@ const inspector = document.getElementById('inspector');
 let mode = 'select';
 let netData = null;
 let arcSource = null;      // name of first-clicked node when adding an arc
-let selected = null;       // {kind:'state'|'action'|'transition', name}
+let selected = null;       // {kind:'state'|'transition'|'arc', name}
 let dragging = null;       // name of node currently being dragged
 let draggingLabel = null;  // {kind, name} of a label being repositioned
 let draggingBend = null;   // name of arc whose curve handle is being dragged
@@ -213,7 +213,7 @@ let draggingBend = null;   // name of arc whose curve handle is being dragged
 const HINTS = {
   select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, drag its label to reposition just the text, or drag a selected arc\'s handle to curve it.',
   state: 'Click on the canvas to place a new State (a place that holds tokens).',
-  action: 'Click on the canvas to place a new Action (a transition bar).',
+  transition: 'Click on the canvas to place a firing transition.',
   arc: 'Click a source node, then a target node, to connect them with an arc.',
 };
 
@@ -247,14 +247,14 @@ document.addEventListener('keydown', (e) => {
 function setMode(m) {
   mode = m;
   arcSource = null;
-  ['select', 'state', 'action', 'arc'].forEach(k =>
+  ['select', 'state', 'transition', 'arc'].forEach(k =>
     document.getElementById('mode-' + k).classList.toggle('active', k === m));
   hint.textContent = HINTS[m];
   render();
 }
 document.getElementById('mode-select').onclick = () => setMode('select');
 document.getElementById('mode-state').onclick = () => setMode('state');
-document.getElementById('mode-action').onclick = () => setMode('action');
+document.getElementById('mode-transition').onclick = () => setMode('transition');
 document.getElementById('mode-arc').onclick = () => setMode('arc');
 
 function showError(msg) {
@@ -309,12 +309,12 @@ document.getElementById('file-input').onchange = async (e) => {
 
 function findNode(name) {
   if (!netData) return null;
-  return netData.states.find(s => s.name === name) || netData.actions.find(a => a.name === name);
+  return netData.states.find(s => s.name === name) || netData.transitions.find(t => t.name === name);
 }
 function nodeKind(name) {
   if (!netData) return null;
   if (netData.states.find(s => s.name === name)) return 'state';
-  if (netData.actions.find(a => a.name === name)) return 'action';
+  if (netData.transitions.find(t => t.name === name)) return 'transition';
   return null;
 }
 
@@ -331,12 +331,12 @@ svg.addEventListener('click', async (e) => {
     await api('/api/state', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, description, x: pt.x, y: pt.y})});
     await refresh();
-  } else if (mode === 'action' && !hit) {
-    const suggested = (await api('/api/autoname/action')).name;
-    const name = prompt('Transition (action) name:', suggested);
+  } else if (mode === 'transition' && !hit) {
+    const suggested = (await api('/api/autoname/transition')).name;
+    const name = prompt('Transition name:', suggested);
     if (!name) return;
     const description = prompt('Description (optional):', '') || '';
-    await api('/api/action', {method:'POST', headers:{'Content-Type':'application/json'},
+    await api('/api/transition', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, description, x: pt.x, y: pt.y})});
     await refresh();
   } else if (mode === 'arc' && hit) {
@@ -346,7 +346,7 @@ svg.addEventListener('click', async (e) => {
       hint.textContent = `Source: "${name}". Now click the target node.`;
       render();
     } else {
-      const suggested = (await api('/api/autoname/transition')).name;
+      const suggested = (await api('/api/autoname/arc')).name;
       const arcName = prompt('Arc name:', suggested);
       if (!arcName) { arcSource = null; render(); return; }
       const weightRaw = prompt('Weight (tokens consumed/produced):', '1');
@@ -359,7 +359,7 @@ svg.addEventListener('click', async (e) => {
         if (typeRaw && ['normal','inhibitor','read'].includes(typeRaw.trim())) arcType = typeRaw.trim();
       }
       try {
-        await api('/api/transition', {method:'POST', headers:{'Content-Type':'application/json'},
+        await api('/api/arc', {method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({name: arcName, source: arcSource, target: name, weight, arc_type: arcType})});
         await refresh();
       } finally { arcSource = null; hint.textContent = HINTS.arc; render(); }
@@ -446,7 +446,7 @@ arcsLayer.addEventListener('mousedown', (e) => {
   const hit = e.target.closest('[data-name]');
   if (!hit) return;
   if (e.target.dataset.role === 'label') {
-    draggingLabel = { kind: 'transition', name: hit.dataset.name };
+    draggingLabel = { kind: 'arc', name: hit.dataset.name };
   } else if (e.target.dataset.role === 'bend-handle') {
     draggingBend = hit.dataset.name;
   }
@@ -458,12 +458,12 @@ svg.addEventListener('mousemove', (e) => {
     const node = findNode(dragging);
     if (node) { node.x = pt.x; node.y = pt.y; render(); }
   } else if (draggingLabel) {
-    if (draggingLabel.kind === 'transition') {
-      const t = netData.transitions.find(x => x.name === draggingLabel.name);
-      const geo = t && arcPointsFor(t);
+    if (draggingLabel.kind === 'arc') {
+      const arc = netData.arcs.find(x => x.name === draggingLabel.name);
+      const geo = arc && arcPointsFor(arc);
       if (geo) {
-        t.label_dx = pt.x - geo.curveMid.x;
-        t.label_dy = pt.y - geo.curveMid.y;
+        arc.label_dx = pt.x - geo.curveMid.x;
+        arc.label_dy = pt.y - geo.curveMid.y;
         render();
       }
     } else {
@@ -471,13 +471,13 @@ svg.addEventListener('mousemove', (e) => {
       if (node) { node.label_dx = pt.x - node.x; node.label_dy = pt.y - node.y; render(); }
     }
   } else if (draggingBend) {
-    const t = netData.transitions.find(x => x.name === draggingBend);
-    const geo = t && arcPointsFor(t);
+    const arc = netData.arcs.find(x => x.name === draggingBend);
+    const geo = arc && arcPointsFor(arc);
     if (geo) {
       // signed distance from the mouse point to the straight p1-p2 line,
       // measured along the line's normal -- that *is* the bend value.
       const v = { x: pt.x - geo.mid.x, y: pt.y - geo.mid.y };
-      t.bend = v.x * geo.normal.x + v.y * geo.normal.y;
+      arc.bend = v.x * geo.normal.x + v.y * geo.normal.y;
       render();
     }
   }
@@ -496,11 +496,11 @@ window.addEventListener('mouseup', async () => {
   if (draggingLabel) {
     const { kind, name } = draggingLabel;
     draggingLabel = null;
-    if (kind === 'transition') {
-      const t = netData.transitions.find(x => x.name === name);
-      if (t) await api(`/api/transition/${encodeURIComponent(name)}/label_position`, {
+    if (kind === 'arc') {
+      const arc = netData.arcs.find(x => x.name === name);
+      if (arc) await api(`/api/arc/${encodeURIComponent(name)}/label_position`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({dx: t.label_dx, dy: t.label_dy})});
+        body: JSON.stringify({dx: arc.label_dx, dy: arc.label_dy})});
     } else {
       const node = findNode(name);
       if (node) await api(`/api/node/${encodeURIComponent(name)}/label_position`, {
@@ -511,11 +511,11 @@ window.addEventListener('mouseup', async () => {
   }
   if (draggingBend) {
     const name = draggingBend;
-    const t = netData.transitions.find(x => x.name === name);
+    const arc = netData.arcs.find(x => x.name === name);
     draggingBend = null;
-    if (t) await api(`/api/transition/${encodeURIComponent(name)}/curve`, {
+    if (arc) await api(`/api/arc/${encodeURIComponent(name)}/curve`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({bend: t.bend || 0})});
+      body: JSON.stringify({bend: arc.bend || 0})});
     await refresh();
   }
 });
@@ -531,54 +531,54 @@ function renderInspector() {
   inspector.style.display = 'flex';
   inspector.innerHTML = '';
 
-  if (selected.kind === 'transition') {
-    const t = netData.transitions.find(t => t.name === selected.name);
-    if (!t) { selected = null; inspector.style.display = 'none'; return; }
-    const canChooseType = t.side === 'pre';
+  if (selected.kind === 'arc') {
+    const arc = netData.arcs.find(arc => arc.name === selected.name);
+    if (!arc) { selected = null; inspector.style.display = 'none'; return; }
+    const canChooseType = arc.side === 'pre';
     inspector.innerHTML = `
-      <h2>Arc: ${t.name}</h2>
-      <div class="muted">${t.source} &rarr; ${t.target} (${t.side})</div>
+      <h2>Arc: ${arc.name}</h2>
+      <div class="muted">${arc.source} &rarr; ${arc.target} (${arc.side})</div>
       <div class="row"><label>Weight</label>
-        <input id="insp-weight" type="number" min="1" value="${t.weight}" /></div>
+        <input id="insp-weight" type="number" min="1" value="${arc.weight}" /></div>
       ${canChooseType ? `
         <div class="row"><label>Type</label>
           <select id="insp-type">
-            <option value="normal" ${t.arc_type==='normal'?'selected':''}>normal</option>
-            <option value="inhibitor" ${t.arc_type==='inhibitor'?'selected':''}>inhibitor</option>
-            <option value="read" ${t.arc_type==='read'?'selected':''}>read (test)</option>
-          </select></div>` : `<div class="muted">Type: ${t.arc_type} (output arcs are always normal)</div>`}
+            <option value="normal" ${arc.arc_type==='normal'?'selected':''}>normal</option>
+            <option value="inhibitor" ${arc.arc_type==='inhibitor'?'selected':''}>inhibitor</option>
+            <option value="read" ${arc.arc_type==='read'?'selected':''}>read (test)</option>
+          </select></div>` : `<div class="muted">Type: ${arc.arc_type} (output arcs are always normal)</div>`}
       <div class="row"><label>Curve</label>
-        <input id="insp-bend" type="number" step="5" value="${Math.round(t.bend || 0)}" />
+        <input id="insp-bend" type="number" step="5" value="${Math.round(arc.bend || 0)}" />
         <button id="insp-straighten">Straighten</button></div>
       <button class="danger" id="insp-delete">Delete arc</button>`;
 
     const applyArcChange = async () => {
       const weight = parseInt(document.getElementById('insp-weight').value || '1', 10);
       const arc_type = canChooseType ? document.getElementById('insp-type').value : 'normal';
-      await api(`/api/transition/${encodeURIComponent(t.name)}`, {method:'DELETE'});
+      await api(`/api/arc/${encodeURIComponent(arc.name)}`, {method:'DELETE'});
       try {
-        await api('/api/transition', {method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({name: t.name, description: t.description,
-            source: t.source, target: t.target, weight, arc_type})});
-        if (t.bend) await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
-          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend: t.bend})});
-      } finally { await refresh(); selectNode('transition', t.name); }
+        await api('/api/arc', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({name: arc.name, description: arc.description,
+            source: arc.source, target: arc.target, weight, arc_type})});
+        if (arc.bend) await api(`/api/arc/${encodeURIComponent(arc.name)}/curve`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend: arc.bend})});
+      } finally { await refresh(); selectNode('arc', arc.name); }
     };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
     document.getElementById('insp-bend').onchange = async (e) => {
       const bend = parseFloat(e.target.value || '0');
-      await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
+      await api(`/api/arc/${encodeURIComponent(arc.name)}/curve`, {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend})});
-      await refresh(); selectNode('transition', t.name);
+      await refresh(); selectNode('arc', arc.name);
     };
     document.getElementById('insp-straighten').onclick = async () => {
-      await api(`/api/transition/${encodeURIComponent(t.name)}/curve`, {
+      await api(`/api/arc/${encodeURIComponent(arc.name)}/curve`, {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({bend: 0})});
-      await refresh(); selectNode('transition', t.name);
+      await refresh(); selectNode('arc', arc.name);
     };
     document.getElementById('insp-delete').onclick = async () => {
-      await api(`/api/transition/${encodeURIComponent(t.name)}`, {method:'DELETE'});
+      await api(`/api/arc/${encodeURIComponent(arc.name)}`, {method:'DELETE'});
       selected = null; await refresh();
     };
     return;
@@ -588,7 +588,7 @@ function renderInspector() {
   if (!node) { selected = null; inspector.style.display = 'none'; return; }
   const isState = selected.kind === 'state';
   inspector.innerHTML = `
-    <h2>${isState ? 'Place' : 'Action'}: ${node.name}${!isState && node.enabled ? ' <span style="color:var(--enabled)">(enabled)</span>' : ''}</h2>
+    <h2>${isState ? 'Place' : 'Transition'}: ${node.name}${!isState && node.enabled ? ' <span style="color:var(--enabled)">(enabled)</span>' : ''}</h2>
     <div class="row"><label>Name</label>
       <input id="insp-name" value="${node.name}" /><button id="insp-rename">Rename</button></div>
     <textarea id="insp-desc" rows="2" placeholder="Description">${node.description || ''}</textarea>
@@ -596,7 +596,7 @@ function renderInspector() {
       <div class="row"><label>Tokens: ${node.ficha_count}</label>
         <button id="insp-minus">–1</button><button id="insp-plus">+1</button></div>` :
       `<div class="row"><button id="insp-rotate">⟳ Rotate 90°</button></div>`}
-    <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'action'}</button>`;
+    <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'transition'}</button>`;
 
   document.getElementById('insp-desc').onchange = async (e) => {
     // description edits: kept local for this lightweight prototype build
@@ -626,7 +626,7 @@ function renderInspector() {
   } else {
     document.getElementById('insp-rotate').onclick = async () => {
       await api(`/api/node/${encodeURIComponent(node.name)}/rotate`, {method:'POST'});
-      await refresh(); selectNode('action', node.name);
+      await refresh(); selectNode('transition', node.name);
     };
   }
   document.getElementById('insp-delete').onclick = async () => {
@@ -641,21 +641,21 @@ function render() {
   arcsLayer.innerHTML = '';
   nodesLayer.innerHTML = '';
 
-  for (const t of netData.transitions) {
-    const geo = arcPointsFor(t);
+  for (const arc of netData.arcs) {
+    const geo = arcPointsFor(arc);
     if (!geo) continue;
     const { p1, p2, mid, control, curveMid } = geo;
-    const isSelected = selected && selected.kind==='transition' && selected.name===t.name;
+    const isSelected = selected && selected.kind==='arc' && selected.name===arc.name;
 
     const g = document.createElementNS(svg.namespaceURI, 'g');
     g.setAttribute('class', 'arc');
-    g.dataset.name = t.name; g.dataset.kind = 'transition';
+    g.dataset.name = arc.name; g.dataset.kind = 'arc';
 
     const path = document.createElementNS(svg.namespaceURI, 'path');
     path.setAttribute('d', `M ${p1.x} ${p1.y} Q ${control.x} ${control.y} ${p2.x} ${p2.y}`);
-    path.setAttribute('class', 'type-' + t.arc_type + (isSelected ? ' selected' : ''));
-    path.dataset.name = t.name; path.dataset.kind = 'transition';
-    path.addEventListener('click', (e) => { if (mode==='select'){ e.stopPropagation(); selectNode('transition', t.name); }});
+    path.setAttribute('class', 'type-' + arc.arc_type + (isSelected ? ' selected' : ''));
+    path.dataset.name = arc.name; path.dataset.kind = 'arc';
+    path.addEventListener('click', (e) => { if (mode==='select'){ e.stopPropagation(); selectNode('arc', arc.name); }});
     g.appendChild(path);
 
     if (isSelected) {
@@ -668,17 +668,17 @@ function render() {
       handle.setAttribute('class', 'bend-handle');
       handle.setAttribute('cx', control.x); handle.setAttribute('cy', control.y);
       handle.setAttribute('r', 6);
-      handle.dataset.name = t.name; handle.dataset.kind = 'transition'; handle.dataset.role = 'bend-handle';
+      handle.dataset.name = arc.name; handle.dataset.kind = 'arc'; handle.dataset.role = 'bend-handle';
       g.appendChild(handle);
     }
 
-    const midX = curveMid.x + (t.label_dx ?? 6);
-    const midY = curveMid.y + (t.label_dy ?? -6);
-    const labelText = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
+    const midX = curveMid.x + (arc.label_dx ?? 6);
+    const midY = curveMid.y + (arc.label_dy ?? -6);
+    const labelText = arc.weight > 1 ? `${arc.name} [${arc.weight}]` : arc.name;
     const label = document.createElementNS(svg.namespaceURI, 'text');
     label.setAttribute('x', midX); label.setAttribute('y', midY);
     label.setAttribute('class', 'arc-label');
-    label.dataset.name = t.name; label.dataset.kind = 'transition'; label.dataset.role = 'label';
+    label.dataset.name = arc.name; label.dataset.kind = 'arc'; label.dataset.role = 'label';
     label.textContent = labelText;
     g.appendChild(label);
 
@@ -712,20 +712,20 @@ function render() {
     nodesLayer.appendChild(g);
   }
 
-  for (const a of netData.actions) {
+    for (const transition of netData.transitions) {
     const g = document.createElementNS(svg.namespaceURI, 'g');
-    g.setAttribute('class', 'action');
-    g.dataset.name = a.name; g.dataset.kind = 'action';
+      g.setAttribute('class', 'transition');
+      g.dataset.name = transition.name; g.dataset.kind = 'transition';
     g.style.cursor = 'pointer';
-    const isSel = selected && selected.kind==='action' && selected.name===a.name;
-    const rotation = a.rotation || 0;
-    const classes = [isSel ? 'selected' : '', a.enabled ? 'enabled' : ''].filter(Boolean).join(' ');
-    const lx = a.x + (a.label_dx ?? 0), ly = a.y + (a.label_dy ?? 46);
+      const isSel = selected && selected.kind==='transition' && selected.name===transition.name;
+      const rotation = transition.rotation || 0;
+      const classes = [isSel ? 'selected' : '', transition.enabled ? 'enabled' : ''].filter(Boolean).join(' ');
+      const lx = transition.x + (transition.label_dx ?? 0), ly = transition.y + (transition.label_dy ?? 46);
     g.innerHTML = `
-      <rect x="${a.x-10}" y="${a.y-30}" width="20" height="60" class="${classes}"
-            transform="rotate(${rotation} ${a.x} ${a.y})"></rect>
-      <text class="node-label" data-name="${a.name}" data-kind="action" data-role="label"
-            x="${lx}" y="${ly}" text-anchor="middle">${a.name}</text>
+    <rect x="${transition.x-10}" y="${transition.y-30}" width="20" height="60" class="${classes}"
+      transform="rotate(${rotation} ${transition.x} ${transition.y})"></rect>
+    <text class="node-label" data-name="${transition.name}" data-kind="transition" data-role="label"
+      x="${lx}" y="${ly}" text-anchor="middle">${transition.name}</text>
     `;
     nodesLayer.appendChild(g);
   }

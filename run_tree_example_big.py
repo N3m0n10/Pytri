@@ -1,4 +1,4 @@
-from petri import PETRI, State, Action
+from petri import PETRI, State, Transition
 
 
 def build_example_net():
@@ -6,30 +6,30 @@ def build_example_net():
     # create 4 places
     for i in range(1, 5):
         net.add_state(State(f"p{i}", f"place {i}"))
-    # create 3 actions
-    net.add_action(Action("t1", "t1"))
-    net.add_action(Action("t2", "t2"))
-    net.add_action(Action("t3", "t3"))
+    # create 3 transitions
+    net.add_transition(Transition("t1", "t1"))
+    net.add_transition(Transition("t2", "t2"))
+    net.add_transition(Transition("t3", "t3"))
 
-    # arcs (as transitions/edges):
+    # arcs:
     # p1 -> t1 -> p2
     # p2 -> t2 -> p3
     # p3 -> t3 -> p4
     # p4 -> t1 -> p1 (feedback)
-    net.add_transition_by_names("a1", "p1->t1", "p1", "t1")
-    net.add_transition_by_names("a2", "t1->p2", "t1", "p2")
-    net.add_transition_by_names("a3", "p2->t2", "p2", "t2")
-    net.add_transition_by_names("a4", "t2->p3", "t2", "p3")
-    net.add_transition_by_names("a5", "p3->t3", "p3", "t3")
-    net.add_transition_by_names("a6", "t3->p4", "t3", "p4")
-    net.add_transition_by_names("a7", "p4->t1", "p4", "t1")
-    net.add_transition_by_names("a8", "t1->p1", "t1", "p1")
+    net.add_arc_by_names("a1", "p1->t1", "p1", "t1")
+    net.add_arc_by_names("a2", "t1->p2", "t1", "p2")
+    net.add_arc_by_names("a3", "p2->t2", "p2", "t2")
+    net.add_arc_by_names("a4", "t2->p3", "t2", "p3")
+    net.add_arc_by_names("a5", "p3->t3", "p3", "t3")
+    net.add_arc_by_names("a6", "t3->p4", "t3", "p4")
+    net.add_arc_by_names("a7", "p4->t1", "p4", "t1")
+    net.add_arc_by_names("a8", "t1->p1", "t1", "p1")
 
     # initial marking
     net.set_ficha("p1", 1)
     net.set_ficha("p2", 0)
     net.set_ficha("p3", 0)
-    net.set_ficha("p4", 0)
+    net.set_ficha("p4", 1)
     return net
 
 

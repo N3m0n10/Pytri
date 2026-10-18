@@ -2,7 +2,7 @@
 GUI backend for the Petri net prototyping tool.
 
 This is deliberately a thin layer: every request just calls straight into
-petri.py's PETRI/State/Action/Transition API and turns PetriError/ValueError
+petri.py's PETRI/State/Transition/Arc API and turns PetriError/ValueError
 into a JSON error response. No net-editing logic lives here -- it all lives
 in the model, so the same guarantees apply whether you're using the CLI or
 the GUI.
@@ -19,7 +19,7 @@ from flask import Flask, jsonify, request, render_template, send_file
 import io
 import json
 
-from petri import PETRI, State, Action, PetriError
+from petri import PETRI, State, Transition, PetriError
 
 app = Flask(__name__)
 
@@ -32,8 +32,8 @@ arc_curves = {}         # arc name -> {"bend": float}  (perpendicular offset of 
 def node_kind(name):
     if name in net.states:
         return "state"
-    if name in net.actions:
-        return "action"
+    if name in net.transitions:
+        return "transition"
     return None
 
 
@@ -48,24 +48,25 @@ def net_payload():
             }
             for s in net.states.values()
         ],
-        "actions": [
-            {
-                "name": a.name, "description": a.description, "enum": a.enum,
-                "enabled": net.is_enabled(a.name),
-                **{"x": 240, "y": 80, "rotation": 0, "label_dx": 0, "label_dy": 46,
-                   **positions.get(a.name, {})},
-            }
-            for a in net.actions.values()
-        ],
         "transitions": [
             {
-                "name": t.name, "description": t.description,
-                "source": t.source.name, "target": t.target.name,
-                "weight": t.weight, "arc_type": t.arc_type, "side": t.side,
-                **{"label_dx": 6, "label_dy": -6, **arc_labels.get(t.name, {})},
-                **{"bend": 0, **arc_curves.get(t.name, {})},
+                "name": transition.name, "description": transition.description,
+                "enum": transition.enum, "type": transition.type,
+                "enabled": net.is_enabled(transition.name),
+                **{"x": 240, "y": 80, "rotation": 0, "label_dx": 0, "label_dy": 46,
+                   **positions.get(transition.name, {})},
             }
-            for t in net.transitions.values()
+            for transition in net.transitions.values()
+        ],
+        "arcs": [
+            {
+                "name": arc.name, "description": arc.description,
+                "source": arc.source.name, "target": arc.target.name,
+                "weight": arc.weight, "arc_type": arc.arc_type, "side": arc.side,
+                **{"label_dx": 6, "label_dy": -6, **arc_labels.get(arc.name, {})},
+                **{"bend": 0, **arc_curves.get(arc.name, {})},
+            }
+            for arc in net.arcs.values()
         ],
     }
 
@@ -116,22 +117,22 @@ def add_state():
     return jsonify(net_payload())
 
 
-@app.route("/api/action", methods=["POST"])
-def add_action():
+@app.route("/api/transition", methods=["POST"])
+def add_transition():
     data = request.get_json(force=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
-        return err("Action name is required.")
+        return err("Transition name is required.")
     try:
-        net.add_action(Action(name, data.get("description", ""), len(net.actions)))
+        net.add_transition(Transition(name, data.get("description", ""), len(net.transitions)))
     except PetriError as e:
         return err(e)
     positions[name] = {"x": data.get("x", 240), "y": data.get("y", 80)}
     return jsonify(net_payload())
 
 
-@app.route("/api/transition", methods=["POST"])
-def add_transition():
+@app.route("/api/arc", methods=["POST"])
+def add_arc():
     data = request.get_json(force=True) or {}
     name = (data.get("name") or "").strip()
     source = data.get("source")
@@ -140,7 +141,7 @@ def add_transition():
         return err("Arc name, source and target are all required.")
     try:
         weight = int(data.get("weight", 1))
-        net.add_transition_by_names(
+        net.add_arc_by_names(
             name, data.get("description", ""), source, target,
             weight=weight, arc_type=data.get("arc_type", "normal"),
         )
@@ -183,7 +184,7 @@ def move_node_label(name):
 
 @app.route("/api/node/<name>/rotate", methods=["POST"])
 def rotate_node(name):
-    """Rotate a node's visual element by 90deg (only meaningful for Actions,
+    """Rotate a node's visual element by 90deg (only meaningful for Transitions,
     the transition bars -- Places are drawn as circles and look the same at
     any rotation, but the endpoint works for either)."""
     if node_kind(name) is None:
@@ -204,8 +205,8 @@ def rename_node(name):
     try:
         if kind == "state":
             net.rename_state(name, new_name)
-        elif kind == "action":
-            net.rename_action(name, new_name)
+        elif kind == "transition":
+            net.rename_transition(name, new_name)
         else:
             return err(f"No node named '{name}'.", 404)
     except PetriError as e:
@@ -219,10 +220,10 @@ def rename_node(name):
 def autoname(kind):
     if kind == "state":
         return jsonify({"name": net._removed_state_names.pop() if net._removed_state_names else net.next_state_name()})
-    if kind == "action":
-        return jsonify({"name": net._removed_action_names.pop() if net._removed_action_names else net.next_action_name()})
     if kind == "transition":
         return jsonify({"name": net._removed_transition_names.pop() if net._removed_transition_names else net.next_transition_name()})
+    if kind == "arc":
+        return jsonify({"name": net._removed_arc_names.pop() if net._removed_arc_names else net.next_arc_name()})
     return err(f"Unknown kind '{kind}'.", 404)
 
 
@@ -231,16 +232,16 @@ def autoname(kind):
 # rule itself is ready in petri.py and reachable here for testing/tooling
 # ahead of building the actual simulation controls.
 
-@app.route("/api/action/<name>/enabled", methods=["GET"])
-def action_enabled(name):
+@app.route("/api/transition/<name>/enabled", methods=["GET"])
+def transition_enabled(name):
     try:
         return jsonify({"name": name, "enabled": net.is_enabled(name)})
     except PetriError as e:
         return err(e, 404)
 
 
-@app.route("/api/action/<name>/fire", methods=["POST"])
-def fire_action(name):
+@app.route("/api/transition/<name>/fire", methods=["POST"])
+def fire_transition(name):
     try:
         net.fire(name)
     except PetriError as e:
@@ -254,8 +255,8 @@ def delete_node(name):
     try:
         if kind == "state":
             net.remove_state(name)
-        elif kind == "action":
-            net.remove_action(name)
+        elif kind == "transition":
+            net.remove_transition(name)
         else:
             return err(f"No node named '{name}'.", 404)
     except PetriError as e:
@@ -264,10 +265,10 @@ def delete_node(name):
     return jsonify(net_payload())
 
 
-@app.route("/api/transition/<name>", methods=["DELETE"])
-def delete_transition(name):
+@app.route("/api/arc/<name>", methods=["DELETE"])
+def delete_arc(name):
     try:
-        net.remove_transition(name)
+        net.remove_arc(name)
     except PetriError as e:
         return err(e)
     arc_labels.pop(name, None)
@@ -275,22 +276,22 @@ def delete_transition(name):
     return jsonify(net_payload())
 
 
-@app.route("/api/transition/<name>/label_position", methods=["POST"])
-def move_transition_label(name):
+@app.route("/api/arc/<name>/label_position", methods=["POST"])
+def move_arc_label(name):
     data = request.get_json(force=True) or {}
-    if name not in net.transitions:
+    if name not in net.arcs:
         return err(f"No arc named '{name}'.", 404)
     arc_labels[name] = {"label_dx": data.get("dx", 6), "label_dy": data.get("dy", -6)}
     return jsonify(net_payload())
 
 
-@app.route("/api/transition/<name>/curve", methods=["POST"])
-def curve_transition(name):
+@app.route("/api/arc/<name>/curve", methods=["POST"])
+def curve_arc(name):
     """Bend an arc away from the straight line between its endpoints.
     `bend` is a signed pixel offset for the curve's control point,
     perpendicular to the straight line; 0 means straight."""
     data = request.get_json(force=True) or {}
-    if name not in net.transitions:
+    if name not in net.arcs:
         return err(f"No arc named '{name}'.", 404)
     try:
         bend = float(data.get("bend", 0))

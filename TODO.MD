@@ -1,7 +1,7 @@
-- [ ] Handle progressive naming when a stance is deleated 
+- [x] Handle progressive naming when a stance is deleated 
 - [x] Create and validate de A matrix asked or in simulation 
-    - [ ] Use the A matriz, actual state inputs and transition to fast-simulation 
+    - [~] Use the A matriz, actual state inputs and transition to fast-simulation 
 - [ ] Create a capacity STATE
 - [ ] Creating a specific place for simulation (class) 
-- [ ] Prepare for tree implemantation 
-- [ ] Save last n states to create CTRL C,V 
+- [x] Prepare for tree implemantation (DONE FULL)
+- [x] Save last n states to create CTRL C,V 

@@ -71,7 +71,7 @@ def tree(incidence_matrix, output):
 
 """
 Accumulation [w]:
-if pos n-1 has equal values for all making except one (wich increases),
+if pos n-1 has equal or bigger values for all making (wich increases),
 then the marking is an accumulation of the previous one, them the tree 
 should add w to the accumulated value, and do not add the same transition
 in this line.

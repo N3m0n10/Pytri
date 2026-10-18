@@ -25,3 +25,6 @@ E para github pages:
 ##### TREE ##### 
 
 Implementação de árvore de alcançabilidade/cobertura
+
+--------------12/10/26--------------
+Árvore completa

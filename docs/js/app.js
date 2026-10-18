@@ -11,6 +11,52 @@ const hint = document.getElementById('hint');
 const errorBox = document.getElementById('error');
 const inspector = document.getElementById('inspector');
 const STORAGE_KEY = 'pytri-net-v1';
+const SETTINGS_KEY = 'pytri-settings-v1';
+
+// Settings ------------------------------------------------------------------
+// To add a setting: append an entry here. The settings dialog is built from
+// this list, defaults are filled in automatically and values persist in
+// localStorage. Supported types: 'choice' (options: [{value,label,description}])
+// and 'boolean'.
+const SETTINGS_SCHEMA = [
+  {
+    key: 'stateDeleteNaming',
+    type: 'choice',
+    label: 'When a place is deleted',
+    default: 'reuse',
+    options: [
+      {
+        value: 'reuse',
+        label: 'Reuse the freed name',
+        description: 'Other places keep their names. The deleted name (e.g. p2) is given to the next place you create.'
+      },
+      {
+        value: 'renumber',
+        label: 'Rename the places below it',
+        description: 'Higher-numbered places shift down to close the gap, lowest first (deleting p2 turns p3 into p2, p4 into p3, ...).'
+      }
+    ]
+  }
+];
+
+function loadSettings() {
+  const out = {};
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') || {}; } catch (_) {}
+  for (const def of SETTINGS_SCHEMA) {
+    let value = saved[def.key];
+    if (def.type === 'choice' && !def.options.some(o => o.value === value)) value = def.default;
+    if (def.type === 'boolean' && typeof value !== 'boolean') value = def.default;
+    out[def.key] = value;
+  }
+  return out;
+}
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+}
+
+let settings = loadSettings();
 
 let mode = 'select';
 let netData = emptyNet('Untitled Net');
@@ -39,7 +85,7 @@ let currentZoomLevel = 1.0;
 const HINTS = {
   select: 'Click a node or arc to inspect/edit it. Drag a node body to move it, or drag its label to reposition just the text.',
   state: 'Click on the canvas to place a new State (a place that holds tokens).',
-  action: 'Click on the canvas to place a new Action (a transition bar).',
+  transition: 'Click on the canvas to place a firing transition.',
   arc: 'Click a source node, then a target node, to connect them with an arc.'
 };
 
@@ -47,9 +93,9 @@ function emptyNet(name) {
   return {
     name,
     states: [],
-    actions: [],
     transitions: [],
-    counters: { state: 0, action: 0, transition: 0 }
+    arcs: [],
+    counters: { state: 0, transition: 0, arc: 0 }
   };
 }
 
@@ -57,10 +103,10 @@ function emptyNet(name) {
 // A failed/cancelled name dialog must NOT consume the next number.
 // Removed automatic names are kept in a reuse buffer, matching petri.py's
 // _removed_*_names behaviour.
-const renameBuffer = { state: [], action: [], transition: [] };
+const renameBuffer = { state: [], transition: [], arc: [] };
 
 function nameTaken(name) {
-  return !!findNode(name) || netData.transitions.some(t => t.name === name);
+  return !!findNode(name) || netData.arcs.some(arc => arc.name === name);
 }
 
 function syncRenameBuffer() {
@@ -71,11 +117,22 @@ function syncRenameBuffer() {
   }
 }
 
+function autoNumber(kind, name) {
+  const prefix = kind === 'state' ? 'p' : kind === 'transition' ? 't' : 'a';
+  const match = new RegExp(`^${prefix}(\\d+)$`).exec(name);
+  return match ? Number(match[1]) : null;
+}
+
 function suggestName(kind) {
   syncRenameBuffer();
-  if (renameBuffer[kind].length) return renameBuffer[kind][0];
+  // Freed names are handed out lowest-first (p2 before p5), regardless of
+  // the order in which they were deleted.
+  if (renameBuffer[kind].length) {
+    return [...renameBuffer[kind]].sort((a, b) =>
+      (autoNumber(kind, a) ?? Infinity) - (autoNumber(kind, b) ?? Infinity))[0];
+  }
 
-  const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
+  const prefix = kind === 'state' ? 'p' : kind === 'transition' ? 't' : 'a';
   let seq = Number(netData.counters[kind] || 0);
   while (nameTaken(`${prefix}${seq + 1}`)) seq++;
   return `${prefix}${seq + 1}`;
@@ -89,13 +146,13 @@ function commitName(kind, name) {
     return;
   }
 
-  const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
+  const prefix = kind === 'state' ? 'p' : kind === 'transition' ? 't' : 'a';
   const match = new RegExp(`^${prefix}(\\d+)$`).exec(name);
   if (match) netData.counters[kind] = Math.max(netData.counters[kind], Number(match[1]));
 }
 
 function rememberRemovedName(kind, name) {
-  const prefix = kind === 'state' ? 'p' : kind === 'action' ? 't' : 'a';
+  const prefix = kind === 'state' ? 'p' : kind === 'transition' ? 't' : 'a';
   if (new RegExp(`^${prefix}\\d+$`).test(name) && !renameBuffer[kind].includes(name)) {
     renameBuffer[kind].push(name);
   }
@@ -103,13 +160,23 @@ function rememberRemovedName(kind, name) {
 
 function findNode(name) {
   return netData.states.find(s => s.name === name) ||
-         netData.actions.find(a => a.name === name) || null;
+         netData.transitions.find(transition => transition.name === name) || null;
 }
 
 function nodeKind(name) {
   if (netData.states.some(s => s.name === name)) return 'state';
-  if (netData.actions.some(a => a.name === name)) return 'action';
+  if (netData.transitions.some(transition => transition.name === name)) return 'transition';
   return null;
+}
+
+function restoreRenameBuffer(saved, legacyFormat = false) {
+  renameBuffer.state = Array.isArray(saved?.state) ? saved.state.map(String) : [];
+  renameBuffer.transition = Array.isArray(saved?.transition)
+    ? saved.transition.map(String)
+    : Array.isArray(saved?.action) ? saved.action.map(String) : [];
+  renameBuffer.arc = Array.isArray(saved?.arc)
+    ? saved.arc.map(String)
+    : legacyFormat && Array.isArray(saved?.transition) ? saved.transition.map(String) : [];
 }
 
 function showError(msg) {
@@ -126,8 +193,8 @@ function snapshot() {
     net: netData,
     renameBuffer: {
       state: [...renameBuffer.state],
-      action: [...renameBuffer.action],
-      transition: [...renameBuffer.transition]
+      transition: [...renameBuffer.transition],
+      arc: [...renameBuffer.arc]
     }
   });
 }
@@ -148,14 +215,11 @@ function restoreSnapshot(snap) {
   const parsed = JSON.parse(snap);
   if (parsed && parsed.net && parsed.net.states) {
     netData = normalizeNet(parsed.net);
-    for (const kind of Object.keys(renameBuffer)) {
-      renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
-        ? parsed.renameBuffer[kind].map(String) : [];
-    }
+    restoreRenameBuffer(parsed.renameBuffer, !Array.isArray(parsed.net.arcs));
   } else {
     // Backwards compatibility with snapshots from the previous static build.
     netData = normalizeNet(parsed);
-    for (const kind of Object.keys(renameBuffer)) renameBuffer[kind] = [];
+    restoreRenameBuffer(null);
   }
   syncRenameBuffer();
   localStorage.setItem(STORAGE_KEY, snapshot());
@@ -190,12 +254,10 @@ function loadLocal() {
     // Accept both the current wrapped format and older exports/localStorage.
     if (parsed && parsed.net && parsed.net.states) {
       netData = normalizeNet(parsed.net);
-      for (const kind of Object.keys(renameBuffer)) {
-        renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
-          ? parsed.renameBuffer[kind].map(String) : [];
-      }
+      restoreRenameBuffer(parsed.renameBuffer, !Array.isArray(parsed.net.arcs));
     } else {
       netData = normalizeNet(parsed);
+      restoreRenameBuffer(parsed?._editor?.renameBuffer, !Array.isArray(parsed?.arcs));
     }
     syncRenameBuffer();
   } catch (e) {
@@ -205,6 +267,9 @@ function loadLocal() {
 
 function normalizeNet(data) {
   const n = emptyNet(data?.name || 'Untitled Net');
+  const legacyFormat = !Array.isArray(data?.arcs);
+  const transitionData = legacyFormat ? data?.actions : data?.transitions;
+  const arcData = legacyFormat ? data?.transitions : data?.arcs;
   n.states = Array.isArray(data?.states) ? data.states.map((s, i) => ({
     name: String(s.name ?? `p${i + 1}`),
     description: String(s.description ?? ''),
@@ -215,40 +280,41 @@ function normalizeNet(data) {
     label_dx: Number(s.label_dx ?? 0),
     label_dy: Number(s.label_dy ?? 46)
   })) : [];
-  n.actions = Array.isArray(data?.actions) ? data.actions.map((a, i) => ({
-    name: String(a.name ?? `t${i + 1}`),
-    description: String(a.description ?? ''),
-    enum: a.enum ?? null,
-    x: Number(a.x ?? 240),
-    y: Number(a.y ?? 80),
-    rotation: Number(a.rotation ?? 0),
-    label_dx: Number(a.label_dx ?? 0),
-    label_dy: Number(a.label_dy ?? 46)
+  n.transitions = Array.isArray(transitionData) ? transitionData.map((transition, i) => ({
+    name: String(transition.name ?? `t${i + 1}`),
+    description: String(transition.description ?? ''),
+    enum: transition.enum ?? null,
+    type: transition.type ?? 'normal',
+    x: Number(transition.x ?? 240),
+    y: Number(transition.y ?? 80),
+    rotation: Number(transition.rotation ?? 0),
+    label_dx: Number(transition.label_dx ?? 0),
+    label_dy: Number(transition.label_dy ?? 46)
   })) : [];
-  n.transitions = Array.isArray(data?.transitions) ? data.transitions.map((t, i) => ({
-    name: String(t.name ?? `a${i + 1}`),
-    description: String(t.description ?? ''),
-    source: String(t.source),
-    target: String(t.target),
-    weight: Math.max(1, parseInt(t.weight ?? 1, 10) || 1),
-    arc_type: ['normal', 'inhibitor', 'read'].includes(t.arc_type) ? t.arc_type : 'normal',
-    label_dx: Number(t.label_dx ?? 6),
-    label_dy: Number(t.label_dy ?? -6)
+  n.arcs = Array.isArray(arcData) ? arcData.map((arc, i) => ({
+    name: String(arc.name ?? `a${i + 1}`),
+    description: String(arc.description ?? ''),
+    source: String(arc.source),
+    target: String(arc.target),
+    weight: Math.max(1, parseInt(arc.weight ?? 1, 10) || 1),
+    arc_type: ['normal', 'inhibitor', 'read'].includes(arc.arc_type) ? arc.arc_type : 'normal',
+    label_dx: Number(arc.label_dx ?? 6),
+    label_dy: Number(arc.label_dy ?? -6)
   })) : [];
   n.counters = {
     state: Number(data?.counters?.state ?? 0),
-    action: Number(data?.counters?.action ?? 0),
-    transition: Number(data?.counters?.transition ?? 0)
+    transition: Number(data?.counters?.transition ?? data?.counters?.action ?? 0),
+    arc: Number(data?.counters?.arc ?? (legacyFormat ? data?.counters?.transition : 0) ?? 0)
   };
   // Make counters at least large enough to avoid collisions after imports.
   for (const s of n.states) {
     const m = /^p(\d+)$/.exec(s.name); if (m) n.counters.state = Math.max(n.counters.state, +m[1]);
   }
-  for (const a of n.actions) {
-    const m = /^t(\d+)$/.exec(a.name); if (m) n.counters.action = Math.max(n.counters.action, +m[1]);
+  for (const transition of n.transitions) {
+    const m = /^t(\d+)$/.exec(transition.name); if (m) n.counters.transition = Math.max(n.counters.transition, +m[1]);
   }
-  for (const t of n.transitions) {
-    const m = /^a(\d+)$/.exec(t.name); if (m) n.counters.transition = Math.max(n.counters.transition, +m[1]);
+  for (const arc of n.arcs) {
+    const m = /^a(\d+)$/.exec(arc.name); if (m) n.counters.arc = Math.max(n.counters.arc, +m[1]);
   }
   return n;
 }
@@ -257,23 +323,23 @@ function netPayload() {
   return {
     name: netData.name,
     states: netData.states,
-    actions: netData.actions.map(a => ({...a, enabled: isEnabled(a.name)})),
-    transitions: netData.transitions
+    transitions: netData.transitions.map(transition => ({...transition, enabled: isEnabled(transition.name)})),
+    arcs: netData.arcs
   };
 }
 
-function isEnabled(actionName) {
-  const action = netData.actions.find(a => a.name === actionName);
-  if (!action) throw new Error(`Action '${actionName}' does not exist.`);
-  const pre = netData.transitions.filter(t =>
-    t.target === actionName && nodeKind(t.source) === 'state'
+function isEnabled(transitionName) {
+  const transition = netData.transitions.find(item => item.name === transitionName);
+  if (!transition) throw new Error(`Transition '${transitionName}' does not exist.`);
+  const pre = netData.arcs.filter(arc =>
+    arc.target === transitionName && nodeKind(arc.source) === 'state'
   );
-  for (const t of pre) {
-    const state = findNode(t.source);
-    if (t.arc_type === 'inhibitor') {
-      if (state.ficha_count >= t.weight) return false;
+  for (const arc of pre) {
+    const state = findNode(arc.source);
+    if (arc.arc_type === 'inhibitor') {
+      if (state.ficha_count >= arc.weight) return false;
     } else {
-      if (state.ficha_count < t.weight) return false;
+      if (state.ficha_count < arc.weight) return false;
     }
   }
   return true;
@@ -294,11 +360,11 @@ function addState(name, description, x, y) {
   saveLocal(); render();
 }
 
-function addAction(name, description, x, y) {
+function addTransition(name, description, x, y) {
   validateUniqueNodeName(name);
-  commitName('action', name);
-  netData.actions.push({
-    name, description, enum: netData.actions.length, x, y,
+  commitName('transition', name);
+  netData.transitions.push({
+    name, description, enum: netData.transitions.length, type: 'normal', x, y,
     rotation: 0, label_dx: 0, label_dy: 46
   });
   saveLocal(); render();
@@ -307,11 +373,11 @@ function addAction(name, description, x, y) {
 function addArc(name, description, source, target, weight, arc_type) {
   validateUniqueName(name);
   const sourceKind = nodeKind(source), targetKind = nodeKind(target);
-  if (!((sourceKind === 'state' && targetKind === 'action') ||
-        (sourceKind === 'action' && targetKind === 'state'))) {
-    throw new Error('Petri nets are bipartite: an arc must connect a State to an Action, or an Action to a State.');
+  if (!((sourceKind === 'state' && targetKind === 'transition') ||
+        (sourceKind === 'transition' && targetKind === 'state'))) {
+    throw new Error('Petri nets are bipartite: an arc must connect a State to a Transition, or a Transition to a State.');
   }
-  if (netData.transitions.some(t => t.source === source && t.target === target)) {
+  if (netData.arcs.some(arc => arc.source === source && arc.target === target)) {
     throw new Error(`An arc from '${source}' to '${target}' already exists.`);
   }
   if (!['normal', 'inhibitor', 'read'].includes(arc_type)) arc_type = 'normal';
@@ -319,8 +385,8 @@ function addArc(name, description, source, target, weight, arc_type) {
   if (!Number.isInteger(weight) || weight < 1) throw new Error('Arc weight must be a positive integer.');
   // Only consume/increment the name allocator after the operation is known
   // to be valid. A failed arc creation must leave the suggestion untouched.
-  commitName('transition', name);
-  netData.transitions.push({
+  commitName('arc', name);
+  netData.arcs.push({
     name, description, source, target, weight, arc_type,
     label_dx: 6, label_dy: -6
   });
@@ -329,7 +395,7 @@ function addArc(name, description, source, target, weight, arc_type) {
 
 function validateUniqueName(name) {
   if (!name) throw new Error('A name is required.');
-  if (findNode(name) || netData.transitions.some(t => t.name === name))
+  if (findNode(name) || netData.arcs.some(arc => arc.name === name))
     throw new Error(`'${name}' is already in use.`);
 }
 
@@ -341,34 +407,65 @@ function renameNode(oldName, newName) {
   // just like deleting it. A failed/duplicate rename reaches none of this.
   rememberRemovedName(nodeKind(oldName), oldName);
   node.name = newName;
-  for (const t of netData.transitions) {
-    if (t.source === oldName) t.source = newName;
-    if (t.target === oldName) t.target = newName;
+  for (const arc of netData.arcs) {
+    if (arc.source === oldName) arc.source = newName;
+    if (arc.target === oldName) arc.target = newName;
   }
   if (selected) selected.name = newName;
   saveLocal(); render();
 }
 
+// Shift every auto-named place numbered above `deletedNumber` down by one,
+// lowest first, so the numbering stays contiguous (p3 -> p2, p4 -> p3, ...).
+function renumberStatesAfter(deletedNumber) {
+  const shifting = netData.states
+    .map(state => ({ state, n: autoNumber('state', state.name) }))
+    .filter(item => item.n !== null && item.n > deletedNumber)
+    .sort((a, b) => a.n - b.n);
+  for (const { state, n } of shifting) {
+    const oldName = state.name;
+    const newName = `p${n - 1}`;
+    if (nameTaken(newName)) continue;
+    state.name = newName;
+    for (const arc of netData.arcs) {
+      if (arc.source === oldName) arc.source = newName;
+      if (arc.target === oldName) arc.target = newName;
+    }
+    if (selected?.name === oldName) selected.name = newName;
+  }
+  const numbers = netData.states
+    .map(state => autoNumber('state', state.name))
+    .filter(n => n !== null);
+  netData.counters.state = numbers.length ? Math.max(...numbers) : 0;
+  renameBuffer.state = renameBuffer.state.filter(n =>
+    !nameTaken(n) && (autoNumber('state', n) ?? 0) <= netData.counters.state);
+}
+
 function removeNode(name) {
   const kind = nodeKind(name);
   if (!kind) throw new Error(`No node named '${name}'.`);
-  rememberRemovedName(kind, name);
+  const deletedNumber = kind === 'state' ? autoNumber('state', name) : null;
+  const renumber = settings.stateDeleteNaming === 'renumber' && deletedNumber !== null;
+  // In renumber mode the gap is closed immediately, so the name is not kept
+  // for reuse.
+  if (!renumber) rememberRemovedName(kind, name);
   // Deleting a node also deletes its arcs. Those arc names are reusable too.
-  for (const t of netData.transitions) {
-    if (t.source === name || t.target === name) rememberRemovedName('transition', t.name);
+  for (const arc of netData.arcs) {
+    if (arc.source === name || arc.target === name) rememberRemovedName('arc', arc.name);
   }
-  netData.transitions = netData.transitions.filter(t => t.source !== name && t.target !== name);
+  netData.arcs = netData.arcs.filter(arc => arc.source !== name && arc.target !== name);
   if (kind === 'state') netData.states = netData.states.filter(s => s.name !== name);
-  else netData.actions = netData.actions.filter(a => a.name !== name);
+  else netData.transitions = netData.transitions.filter(transition => transition.name !== name);
   if (selected?.name === name) selected = null;
+  if (renumber) renumberStatesAfter(deletedNumber);
   saveLocal(); render();
 }
 
 function removeArc(name) {
-  const before = netData.transitions.length;
-  netData.transitions = netData.transitions.filter(t => t.name !== name);
-  if (before === netData.transitions.length) throw new Error(`Arc '${name}' does not exist.`);
-  rememberRemovedName('transition', name);
+  const before = netData.arcs.length;
+  netData.arcs = netData.arcs.filter(arc => arc.name !== name);
+  if (before === netData.arcs.length) throw new Error(`Arc '${name}' does not exist.`);
+  rememberRemovedName('arc', name);
   if (selected?.name === name) selected = null;
   saveLocal(); render();
 }
@@ -382,14 +479,14 @@ function addFicha(name, delta) {
   saveLocal(); render();
 }
 
-function fireAction(name) {
-  if (!isEnabled(name)) throw new Error(`Action '${name}' is not enabled -- a precondition on one of its input places is not satisfied.`);
-  const pre = netData.transitions.filter(t => t.target === name && nodeKind(t.source) === 'state');
-  const post = netData.transitions.filter(t => t.source === name && nodeKind(t.target) === 'state');
-  for (const t of pre) {
-    if (t.arc_type === 'normal') findNode(t.source).ficha_count -= t.weight;
+function fireTransition(name) {
+  if (!isEnabled(name)) throw new Error(`Transition '${name}' is not enabled -- a precondition on one of its input places is not satisfied.`);
+  const pre = netData.arcs.filter(arc => arc.target === name && nodeKind(arc.source) === 'state');
+  const post = netData.arcs.filter(arc => arc.source === name && nodeKind(arc.target) === 'state');
+  for (const arc of pre) {
+    if (arc.arc_type === 'normal') findNode(arc.source).ficha_count -= arc.weight;
   }
-  for (const t of post) findNode(t.target).ficha_count += t.weight;
+  for (const arc of post) findNode(arc.target).ficha_count += arc.weight;
   saveLocal(); render();
 }
 
@@ -401,8 +498,8 @@ function exportNet() {
   out._editor = {
     renameBuffer: {
       state: [...renameBuffer.state],
-      action: [...renameBuffer.action],
-      transition: [...renameBuffer.transition]
+      transition: [...renameBuffer.transition],
+      arc: [...renameBuffer.arc]
     }
   };
   const blob = new Blob([JSON.stringify(out, null, 2)], {type: 'application/json'});
@@ -417,16 +514,10 @@ async function importNet(file) {
   const parsed = JSON.parse(await file.text());
   if (parsed && parsed.net && parsed.net.states) {
     netData = normalizeNet(parsed.net);
-    for (const kind of Object.keys(renameBuffer)) {
-      renameBuffer[kind] = Array.isArray(parsed.renameBuffer?.[kind])
-        ? parsed.renameBuffer[kind].map(String) : [];
-    }
+    restoreRenameBuffer(parsed.renameBuffer, !Array.isArray(parsed.net.arcs));
   } else {
     netData = normalizeNet(parsed);
-    for (const kind of Object.keys(renameBuffer)) {
-      renameBuffer[kind] = Array.isArray(parsed?._editor?.renameBuffer?.[kind])
-        ? parsed._editor.renameBuffer[kind].map(String) : [];
-    }
+    restoreRenameBuffer(parsed?._editor?.renameBuffer, !Array.isArray(parsed?.arcs));
   }
   syncRenameBuffer();
   selected = null;
@@ -492,25 +583,25 @@ function computeReachability() {
   const states = netData.states;
   const stateIndex = new Map(states.map((state, index) => [state.name, index]));
   const initialMarking = states.map(state => state.ficha_count);
-  const omegaAccelerationDisabled = netData.transitions.some(t => t.arc_type === 'inhibitor');
-  const root = { id: 0, parentId: null, action: null, marking: initialMarking, depth: 0 };
+  const omegaAccelerationDisabled = netData.arcs.some(arc => arc.arc_type === 'inhibitor');
+  const root = { id: 0, parentId: null, transition: null, marking: initialMarking, depth: 0 };
   root.ancestorPath = [{ id: root.id, marking: root.marking }];
   const nodes = [root];
   let truncated = false;
-  const actionArcs = netData.actions.map(action => ({
-    action,
-    inputArcs: netData.transitions.filter(t =>
-      t.target === action.name && stateIndex.has(t.source)
+  const transitionArcs = netData.transitions.map(transition => ({
+    transition,
+    inputArcs: netData.arcs.filter(arc =>
+      arc.target === transition.name && stateIndex.has(arc.source)
     ),
-    outputArcs: netData.transitions.filter(t =>
-      t.source === action.name && stateIndex.has(t.target)
+    outputArcs: netData.arcs.filter(arc =>
+      arc.source === transition.name && stateIndex.has(arc.target)
     )
   }));
 
   for (let queueIndex = 0; queueIndex < nodes.length; queueIndex++) {
     const sourceNode = nodes[queueIndex];
     if (sourceNode.terminal) continue;
-    for (const { action, inputArcs, outputArcs } of actionArcs) {
+    for (const { transition, inputArcs, outputArcs } of transitionArcs) {
       const enabled = inputArcs.every(arc => {
         const tokens = sourceNode.marking[stateIndex.get(arc.source)];
         return arc.arc_type === 'inhibitor'
@@ -551,7 +642,7 @@ function computeReachability() {
       const node = {
         id: nodes.length,
         parentId: sourceNode.id,
-        action: action.name,
+        transition: transition.name,
         marking,
         depth: sourceNode.depth + 1,
         terminal: repeatedAncestor ? 'repeat' : null,
@@ -575,7 +666,7 @@ function renderReachability() {
   const edges = nodes.filter(node => node.parentId !== null).map(node => ({
     source: node.parentId,
     target: node.id,
-    action: node.action
+    transition: node.transition
   }));
   const repeatCount = nodes.filter(node => node.terminal === 'repeat').length;
   const placeOrder = netData.states.map(state => state.name).join(', ') || 'no places';
@@ -601,7 +692,7 @@ function renderReachability() {
   graph.setAttribute('width', graphWidth);
   graph.setAttribute('height', graphHeight);
   graph.setAttribute('role', 'img');
-  graph.setAttribute('aria-label', 'Coverability tree with markings as nodes and actions as directed edges');
+  graph.setAttribute('aria-label', 'Coverability tree with markings as nodes and transitions as directed edges');
 
   const defs = document.createElementNS(svg.namespaceURI, 'defs');
   const arrow = document.createElementNS(svg.namespaceURI, 'marker');
@@ -648,7 +739,7 @@ function renderReachability() {
     path.classList.add('reachability-edge');
     path.setAttribute('marker-end', 'url(#reachability-arrow)');
     const title = document.createElementNS(svg.namespaceURI, 'title');
-    title.textContent = `M${edge.source} to M${edge.target} by ${edge.action}`;
+    title.textContent = `M${edge.source} to M${edge.target} by ${edge.transition}`;
     path.appendChild(title);
     graph.appendChild(path);
 
@@ -656,7 +747,7 @@ function renderReachability() {
     edgeLabel.setAttribute('x', labelX);
     edgeLabel.setAttribute('y', labelY);
     edgeLabel.classList.add('reachability-edge-label');
-    edgeLabel.textContent = edge.action;
+    edgeLabel.textContent = edge.transition;
     graph.appendChild(edgeLabel);
   }
 
@@ -719,7 +810,7 @@ function renderMatrices() {
   const content = document.getElementById('matrix-content');
   if (!content) return;
   const states = netData.states;
-  const arcs = netData.transitions;
+  const arcs = netData.arcs;
   if (matrixView === 'output') {
     let html = '<div class="matrix-title">Output / Marking vector</div>';
     if (!states.length) {
@@ -757,14 +848,14 @@ function renderMatrices() {
 
 function setMode(m) {
   mode = m; arcSource = null;
-  ['select', 'state', 'action', 'arc'].forEach(k =>
+  ['select', 'state', 'transition', 'arc'].forEach(k =>
     document.getElementById('mode-' + k).classList.toggle('active', k === m));
   hint.textContent = HINTS[m];
   render();
 }
 document.getElementById('mode-select').onclick = () => setMode('select');
 document.getElementById('mode-state').onclick = () => setMode('state');
-document.getElementById('mode-action').onclick = () => setMode('action');
+document.getElementById('mode-transition').onclick = () => setMode('transition');
 document.getElementById('mode-arc').onclick = () => setMode('arc');
 
 document.getElementById('netname').addEventListener('change', e => {
@@ -839,7 +930,17 @@ function boundaryPoint(node, kind, tx, ty) {
     : rectBoundaryPoint(node.x, node.y, 10, 30, node.rotation || 0, tx, ty);
 }
 
+// True from the moment a press starts on an entity until the click that ends it.
+// The press captures the pointer on <svg>, so that click is dispatched to the
+// <svg> itself (no [data-name] target) and would otherwise look like a click on
+// empty canvas and deselect the entity.
+let pressedEntity = false;
+// Capture phase: runs before startDragNode, which re-arms the flag.
+document.getElementById('canvas-wrap')
+  .addEventListener('pointerdown', () => { pressedEntity = false; }, true);
+
 svg.addEventListener('click', e => {
+  if (pressedEntity) { pressedEntity = false; dragMoved = false; return; }
   if (dragging || draggingLabel || dragMoved) { dragMoved = false; return; }
   const pt = svgPoint(e);
   const hit = e.target.closest('[data-name]');
@@ -850,11 +951,11 @@ svg.addEventListener('click', e => {
       if (!name) return;
       const description = prompt('Description (optional):', '') || '';
       addState(name.trim(), description, pt.x, pt.y);
-    } else if (mode === 'action' && !hit) {
-      const name = prompt('Transition (action) name:', suggestName('action'));
+    } else if (mode === 'transition' && !hit) {
+      const name = prompt('Transition name:', suggestName('transition'));
       if (!name) return;
       const description = prompt('Description (optional):', '') || '';
-      addAction(name.trim(), description, pt.x, pt.y);
+      addTransition(name.trim(), description, pt.x, pt.y);
     } else if (mode === 'arc' && hit) {
       const name = hit.dataset.name;
       if (!arcSource) {
@@ -864,7 +965,7 @@ svg.addEventListener('click', e => {
       } else {
         const source = arcSource;
         const target = name;
-        const arcName = prompt('Arc name:', suggestName('transition'));
+        const arcName = prompt('Arc name:', suggestName('arc'));
         if (!arcName) { arcSource = null; render(); return; }
         const weight = parseInt(prompt('Weight (tokens consumed/produced):', '1') || '1', 10) || 1;
         let arcType = 'normal';
@@ -904,7 +1005,8 @@ const sidebar = document.getElementById('sidebar');
 // Interação de Pan (Mover o Canvas)
 canvasWrap.addEventListener('pointerdown', e => {
   // Se o clique/toque foi em um elemento interativo do SVG, não inicia o Pan
-  if (e.target.closest('[data-name]')) return;
+  // (nor on floating buttons, so a click on them is never turned into a pan)
+  if (e.target.closest('[data-name], button')) return;
 
   panning = {
     pointerId: e.pointerId,
@@ -956,6 +1058,7 @@ function startDragNode(e) {
   // Select entity immediately so the inspector opens with rename, delete, tokens, etc.
   selectNode(hit.dataset.kind, hit.dataset.name);
 
+  pressedEntity = true;
   dragMoved = false;
   const isLabel = e.target.dataset.role === 'label';
 
@@ -979,7 +1082,7 @@ function calculateAlignmentGuides(currentNode, targetX, targetY) {
   let snappedY = targetY;
   const guides = [];
 
-  const allNodes = [...netData.states, ...netData.actions].filter(n => n.name !== currentNode.name);
+  const allNodes = [...netData.states, ...netData.transitions].filter(n => n.name !== currentNode.name);
   if (!allNodes.length) return { snappedX, snappedY, guides };
 
   let snapXFound = false;
@@ -1167,16 +1270,16 @@ svg.addEventListener('pointermove', e => {
       renderGuides(snapResult.guides);
     }
   } else if (draggingLabel) {
-    if (draggingLabel.kind === 'transition') {
-      const t = netData.transitions.find(x => x.name === draggingLabel.name);
-      if (t) {
-        const s = findNode(t.source), tg = findNode(t.target);
+    if (draggingLabel.kind === 'arc') {
+      const arc = netData.arcs.find(item => item.name === draggingLabel.name);
+      if (arc) {
+        const s = findNode(arc.source), tg = findNode(arc.target);
         if (s && tg) {
-          const geometry = arcGeometry(t);
+          const geometry = arcGeometry(arc);
           const mx = geometry ? geometry.midX : (s.x + tg.x) / 2;
           const my = geometry ? geometry.midY : (s.y + tg.y) / 2;
-          t.label_dx = pt.x - mx;
-          t.label_dy = pt.y - my;
+          arc.label_dx = pt.x - mx;
+          arc.label_dy = pt.y - my;
           render();
         }
       }
@@ -1258,9 +1361,9 @@ function renderInspector() {
 
   inspector.innerHTML = '';
 
-  if (selected.kind === 'transition') {
-    const t = netData.transitions.find(t => t.name === selected.name);
-    if (!t) { selected = null; inspector.hidden = true; if (mobileBtn) mobileBtn.hidden = true; return; }
+  if (selected.kind === 'arc') {
+    const t = netData.arcs.find(arc => arc.name === selected.name);
+    if (!t) { selected = null; inspector.hidden = true; if (optionsBtn) optionsBtn.hidden = true; return; }
     const canChooseType = nodeKind(t.source) === 'state';
     inspector.innerHTML = `
       <div class="inspector-header">
@@ -1298,11 +1401,11 @@ function renderInspector() {
   }
 
   const node = findNode(selected.name);
-  if (!node) { selected = null; inspector.hidden = true; if (mobileBtn) mobileBtn.hidden = true; return; }
+  if (!node) { selected = null; inspector.hidden = true; if (optionsBtn) optionsBtn.hidden = true; return; }
   const isState = selected.kind === 'state';
   inspector.innerHTML = `
     <div class="inspector-header">
-      <h2>${isState ? 'Place' : 'Action'}: ${escapeHtml(node.name)}
+      <h2>${isState ? 'Place' : 'Transition'}: ${escapeHtml(node.name)}
         ${!isState && isEnabled(node.name) ? '<span style="color:var(--enabled)">(enabled)</span>' : ''}</h2>
       <button id="insp-close" class="insp-close-btn" title="Close inspector">✕</button>
     </div>
@@ -1315,7 +1418,7 @@ function renderInspector() {
         <button id="insp-minus">–1</button><button id="insp-plus">+1</button></div>` :
       `<div class="row"><button id="insp-rotate">⟳ Rotate 90°</button>
         <button id="insp-fire" ${isEnabled(node.name) ? '' : 'disabled'}>▶ Fire</button></div>`}
-    <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'action'}</button>`;
+    <button class="danger" id="insp-delete">Delete ${isState ? 'place' : 'transition'}</button>`;
 
   document.getElementById('insp-close').onclick = () => { mobileInspectorOpen = false; renderInspector(); };
 
@@ -1345,7 +1448,7 @@ function renderInspector() {
       saveLocal(); render();
     };
     document.getElementById('insp-fire').onclick = () => {
-      try { fireAction(node.name); } catch (err) { showError(err.message); }
+      try { fireTransition(node.name); } catch (err) { showError(err.message); }
     };
   }
 
@@ -1367,7 +1470,7 @@ function arcGeometry(t) {
   const sourceKind = nodeKind(t.source), targetKind = nodeKind(t.target);
   if (!source || !target) return null;
 
-  const reverse = netData.transitions.find(other =>
+  const reverse = netData.arcs.find(other =>
     other !== t && other.source === t.target && other.target === t.source
   );
 
@@ -1376,7 +1479,7 @@ function arcGeometry(t) {
   // the same centre line. This also makes the arrowhead approach the side
   // of the target unit rather than the same point as the first arrow.
   const isFirst = !reverse ||
-    netData.transitions.indexOf(t) < netData.transitions.indexOf(reverse);
+    netData.arcs.indexOf(t) < netData.arcs.indexOf(reverse);
 
   let dx = target.x - source.x, dy = target.y - source.y;
   const dist = Math.hypot(dx, dy) || 1;
@@ -1425,7 +1528,7 @@ function render() {
   arcsLayer.innerHTML = '';
   nodesLayer.innerHTML = '';
 
-  for (const t of netData.transitions) {
+  for (const t of netData.arcs) {
     const s = findNode(t.source), tg = findNode(t.target);
     if (!s || !tg) continue;
     const geometry = arcGeometry(t);
@@ -1434,15 +1537,15 @@ function render() {
 
     const g = document.createElementNS(svg.namespaceURI, 'g');
     g.classList.add('arc');
-    g.dataset.name = t.name; g.dataset.kind = 'transition';
+    g.dataset.name = t.name; g.dataset.kind = 'arc';
 
     const line = document.createElementNS(svg.namespaceURI, 'path');
     line.setAttribute('d', geometry.path);
     line.setAttribute('class', 'type-' + t.arc_type +
-      (selected?.kind === 'transition' && selected.name === t.name ? ' selected' : ''));
-    line.dataset.name = t.name; line.dataset.kind = 'transition';
+      (selected?.kind === 'arc' && selected.name === t.name ? ' selected' : ''));
+    line.dataset.name = t.name; line.dataset.kind = 'arc';
     line.addEventListener('click', e => {
-      if (mode === 'select') { e.stopPropagation(); selectNode('transition', t.name); }
+      if (mode === 'select') { e.stopPropagation(); selectNode('arc', t.name); }
     });
     g.appendChild(line);
 
@@ -1450,7 +1553,7 @@ function render() {
     label.setAttribute('x', midX + (t.label_dx ?? 6));
     label.setAttribute('y', midY + (t.label_dy ?? -6));
     label.setAttribute('class', 'arc-label');
-    label.dataset.name = t.name; label.dataset.kind = 'transition'; label.dataset.role = 'label';
+    label.dataset.name = t.name; label.dataset.kind = 'arc'; label.dataset.role = 'label';
     label.textContent = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
     g.appendChild(label);
     arcsLayer.appendChild(g);
@@ -1482,18 +1585,18 @@ function render() {
     nodesLayer.appendChild(g);
   }
 
-  for (const a of netData.actions) {
+  for (const a of netData.transitions) {
     const g = document.createElementNS(svg.namespaceURI, 'g');
-    g.classList.add('action');
-    g.dataset.name = a.name; g.dataset.kind = 'action';
-    const isSel = selected?.kind === 'action' && selected.name === a.name;
+    g.classList.add('transition');
+    g.dataset.name = a.name; g.dataset.kind = 'transition';
+    const isSel = selected?.kind === 'transition' && selected.name === a.name;
     const rotation = a.rotation || 0;
     const classes = [isSel ? 'selected' : '', isEnabled(a.name) ? 'enabled' : ''].filter(Boolean).join(' ');
     const lx = a.x + (a.label_dx ?? 0), ly = a.y + (a.label_dy ?? 46);
     g.innerHTML = `
       <rect x="${a.x-10}" y="${a.y-30}" width="20" height="60" class="${classes}"
             transform="rotate(${rotation} ${a.x} ${a.y})"></rect>
-      <text class="node-label" data-name="${escapeAttr(a.name)}" data-kind="action"
+      <text class="node-label" data-name="${escapeAttr(a.name)}" data-kind="transition"
             data-role="label" x="${lx}" y="${ly}" text-anchor="middle">${escapeHtml(a.name)}</text>`;
     nodesLayer.appendChild(g);
   }
@@ -1534,6 +1637,271 @@ document.getElementById('help-backdrop').onclick = closeHelp;
 helpUsageTab.onclick = () => setHelpPage('usage');
 helpShortcutsTab.onclick = () => setHelpPage('shortcuts');
 
+// Settings dialog (built from SETTINGS_SCHEMA)
+const settingsModal = document.getElementById('settings-modal');
+const settingsContent = document.getElementById('settings-content');
+
+function renderSettings() {
+  settingsContent.innerHTML = '';
+  for (const def of SETTINGS_SCHEMA) {
+    const section = document.createElement('fieldset');
+    section.className = 'setting';
+    const legend = document.createElement('legend');
+    legend.textContent = def.label;
+    section.appendChild(legend);
+
+    if (def.type === 'choice') {
+      for (const option of def.options) {
+        const label = document.createElement('label');
+        label.className = 'setting-option';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = `setting-${def.key}`;
+        input.value = option.value;
+        input.checked = settings[def.key] === option.value;
+        input.onchange = () => { settings[def.key] = option.value; saveSettings(); };
+        const text = document.createElement('span');
+        const title = document.createElement('b');
+        title.textContent = option.label;
+        text.appendChild(title);
+        if (option.description) {
+          const desc = document.createElement('small');
+          desc.textContent = option.description;
+          text.appendChild(desc);
+        }
+        label.append(input, text);
+        section.appendChild(label);
+      }
+    } else if (def.type === 'boolean') {
+      const label = document.createElement('label');
+      label.className = 'setting-option';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!settings[def.key];
+      input.onchange = () => { settings[def.key] = input.checked; saveSettings(); };
+      const text = document.createElement('span');
+      text.textContent = def.description || def.label;
+      label.append(input, text);
+      section.appendChild(label);
+    }
+    settingsContent.appendChild(section);
+  }
+}
+function openSettings() {
+  renderSettings();
+  settingsModal.hidden = false;
+  document.getElementById('settings-close').focus();
+}
+function closeSettings() { settingsModal.hidden = true; }
+document.getElementById('settings-toggle').onclick = openSettings;
+document.getElementById('settings-close').onclick = closeSettings;
+document.getElementById('settings-backdrop').onclick = closeSettings;
+
+// PNG export ----------------------------------------------------------------
+// The canvas is cloned off-screen, every element gets its computed style baked
+// in while the *chosen* theme is applied (so the output does not depend on the
+// theme currently shown), and the result is rasterised through a <canvas>.
+const EXPORT_KEY = 'pytri-export-v1';
+const EXPORT_PAD = 40;
+const EXPORT_MAX_PIXELS = 16_000_000;
+const EXPORT_BACKGROUNDS = { transparent: null, white: '#ffffff', black: '#000000' };
+const EXPORT_STYLE_PROPS = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray',
+  'stroke-linejoin', 'stroke-linecap', 'opacity', 'font-family', 'font-size',
+  'font-weight', 'text-anchor', 'paint-order'];
+
+const exportModal = document.getElementById('export-modal');
+const exportPreview = document.getElementById('export-preview');
+const exportEmpty = document.getElementById('export-empty');
+const exportInfo = document.getElementById('export-info');
+const exportDownloadBtn = document.getElementById('export-download');
+let exportOptions = { theme: 'light', background: 'white', scale: 2 };
+let exportBlob = null;
+let exportPreviewUrl = null;
+let exportToken = 0;
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+function matchingBackground(theme) { return theme === 'dark' ? 'black' : 'white'; }
+
+function buildExportSvg(theme) {
+  const holder = svg.cloneNode(true);
+  holder.removeAttribute('id');
+  holder.setAttribute('width', BASE_WIDTH);
+  holder.setAttribute('height', BASE_HEIGHT);
+  holder.setAttribute('viewBox', `0 0 ${BASE_WIDTH} ${BASE_HEIGHT}`);
+  holder.setAttribute('style', 'position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none');
+  holder.querySelector('#guides-layer')?.remove();
+  holder.querySelector('#pending-arc')?.remove();
+  holder.querySelectorAll('.selected').forEach(n => n.classList.remove('selected'));
+  document.body.appendChild(holder);
+
+  const root = document.documentElement;
+  const previousTheme = root.getAttribute('data-theme');
+  try {
+    // Content bounds (arcs + nodes + labels), measured on the clean clone.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const id of ['#arcs-layer', '#nodes-layer']) {
+      const layer = holder.querySelector(id);
+      if (!layer || !layer.childNodes.length) continue;
+      const b = layer.getBBox();
+      if (!b.width && !b.height) continue;
+      minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
+    }
+    if (!Number.isFinite(minX)) return null;
+
+    root.setAttribute('data-theme', theme);
+    for (const el of holder.querySelectorAll('*')) {
+      const cs = getComputedStyle(el);
+      el.setAttribute('style', EXPORT_STYLE_PROPS
+        .map(p => `${p}:${cs.getPropertyValue(p)}`).join(';'));
+      const marker = /#([^"')]+)/.exec(cs.getPropertyValue('marker-end'));
+      if (marker) el.setAttribute('marker-end', `url(#${marker[1]})`);
+    }
+
+    const x = Math.floor(minX - EXPORT_PAD), y = Math.floor(minY - EXPORT_PAD);
+    const w = Math.ceil(maxX - minX + EXPORT_PAD * 2), h = Math.ceil(maxY - minY + EXPORT_PAD * 2);
+    return { holder, x, y, w, h };
+  } finally {
+    root.setAttribute('data-theme', previousTheme);
+    holder.remove();
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('The drawing could not be rasterised.'));
+    img.src = src;
+  });
+}
+
+async function renderExportPng() {
+  const token = ++exportToken;
+  const built = buildExportSvg(exportOptions.theme);
+  if (!built) {
+    exportBlob = null;
+    exportPreview.hidden = true;
+    exportEmpty.hidden = false;
+    exportInfo.textContent = '';
+    exportDownloadBtn.disabled = true;
+    return;
+  }
+  const { holder, x, y, w, h } = built;
+  const maxScale = Math.sqrt(EXPORT_MAX_PIXELS / (w * h));
+  const scale = Math.min(exportOptions.scale, maxScale);
+  const pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
+
+  holder.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  holder.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+  holder.setAttribute('width', pw);
+  holder.setAttribute('height', ph);
+  holder.removeAttribute('style');
+  const xml = new XMLSerializer().serializeToString(holder);
+
+  try {
+    const img = await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml));
+    const canvas = document.createElement('canvas');
+    canvas.width = pw; canvas.height = ph;
+    const ctx = canvas.getContext('2d');
+    const bg = EXPORT_BACKGROUNDS[exportOptions.background];
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, pw, ph); }
+    ctx.drawImage(img, 0, 0, pw, ph);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+    if (token !== exportToken) return;           // a newer render superseded this one
+    if (!blob) throw new Error('The PNG could not be created.');
+    exportBlob = blob;
+    if (exportPreviewUrl) URL.revokeObjectURL(exportPreviewUrl);
+    exportPreviewUrl = URL.createObjectURL(blob);
+    exportPreview.src = exportPreviewUrl;
+    exportPreview.hidden = false;
+    exportEmpty.hidden = true;
+    exportDownloadBtn.disabled = false;
+    exportInfo.textContent = `${pw} × ${ph} px` +
+      (scale < exportOptions.scale ? ' (scale reduced to fit browser limits)' : '');
+  } catch (err) {
+    if (token !== exportToken) return;
+    exportBlob = null;
+    exportDownloadBtn.disabled = true;
+    exportInfo.textContent = err.message;
+  }
+}
+
+function syncExportInputs() {
+  for (const [name, value] of Object.entries({
+    'export-theme': exportOptions.theme,
+    'export-background': exportOptions.background,
+    'export-scale': String(exportOptions.scale)
+  })) {
+    exportModal.querySelectorAll(`input[name="${name}"]`)
+      .forEach(input => { input.checked = input.value === value; });
+  }
+}
+
+function openExport() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(EXPORT_KEY) || '{}') || {}; } catch (_) {}
+  const theme = currentTheme();
+  exportOptions = {
+    theme,
+    background: saved.background === 'transparent' ? 'transparent' : matchingBackground(theme),
+    scale: [1, 2, 3, 4].includes(saved.scale) ? saved.scale : 2
+  };
+  syncExportInputs();
+  exportModal.hidden = false;
+  document.getElementById('export-close').focus();
+  renderExportPng();
+}
+function closeExport() {
+  exportModal.hidden = true;
+  exportToken++;
+  if (exportPreviewUrl) { URL.revokeObjectURL(exportPreviewUrl); exportPreviewUrl = null; }
+  exportPreview.removeAttribute('src');
+  exportBlob = null;
+}
+
+exportModal.addEventListener('change', e => {
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  if (input.name === 'export-theme') {
+    exportOptions.theme = input.value;
+    // A solid background follows the theme (white for light, black for dark).
+    if (exportOptions.background !== 'transparent') {
+      exportOptions.background = matchingBackground(input.value);
+    }
+  } else if (input.name === 'export-background') {
+    exportOptions.background = input.value;
+  } else if (input.name === 'export-scale') {
+    exportOptions.scale = Number(input.value);
+  } else return;
+  try {
+    localStorage.setItem(EXPORT_KEY, JSON.stringify({
+      background: exportOptions.background, scale: exportOptions.scale
+    }));
+  } catch (_) {}
+  syncExportInputs();
+  renderExportPng();
+});
+
+exportDownloadBtn.onclick = () => {
+  if (!exportBlob) return;
+  const url = URL.createObjectURL(exportBlob);
+  const a = document.createElement('a');
+  const safeName = (netData.name || 'Untitled_Net').replace(/[\\/:*?"<>|\s]+/g, '_');
+  a.href = url; a.download = `${safeName}.png`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+document.getElementById('btn-export-png').onclick = openExport;
+document.getElementById('export-close').onclick = closeExport;
+document.getElementById('export-backdrop').onclick = closeExport;
+
+function anyModalOpen() {
+  return !helpModal.hidden || !settingsModal.hidden || !exportModal.hidden ||
+         !reachabilityModal.hidden || matrixOpen;
+}
+
 function isTypingTarget(target) {
   return target instanceof HTMLInputElement ||
          target instanceof HTMLTextAreaElement ||
@@ -1544,6 +1912,8 @@ function isTypingTarget(target) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!helpModal.hidden) { closeHelp(); return; }
+    if (!settingsModal.hidden) { closeSettings(); return; }
+    if (!exportModal.hidden) { closeExport(); return; }
     if (matrixOpen) { closeMatrices(); return; }
     if (!reachabilityModal.hidden) { closeReachability(); return; }
     selected = null;
@@ -1577,6 +1947,11 @@ document.addEventListener('keydown', e => {
     if (key === 'o') {
       e.preventDefault();
       document.getElementById('file-input').click();
+      return;
+    }
+    if (key === 'e') {
+      e.preventDefault();
+      if (exportModal.hidden) openExport(); else closeExport();
       return;
     }
     if (key === 'm') {
@@ -1632,11 +2007,11 @@ document.addEventListener('keydown', e => {
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (isTypingTarget(e.target)) return;
+    if (isTypingTarget(e.target) || anyModalOpen() || mod || e.altKey) return;
     if (selected) {
       e.preventDefault();
       try {
-        if (selected.kind === 'transition') removeArc(selected.name);
+        if (selected.kind === 'arc') removeArc(selected.name);
         else removeNode(selected.name);
       } catch (err) { showError(err.message); }
     }
@@ -1645,9 +2020,9 @@ document.addEventListener('keydown', e => {
 
   if (e.code === 'Space') {
     if (isTypingTarget(e.target)) return;
-    if (selected?.kind === 'action') {
+    if (selected?.kind === 'transition') {
       e.preventDefault();
-      try { fireAction(selected.name); }
+      try { fireTransition(selected.name); }
       catch (err) { showError(err.message); }
     }
   }

@@ -1,0 +1,39 @@
+adding infinite accumulation -> 
+def tree(incidence_matrix, output):
+    tree = []
+    visited = set()
+    current_level = [["",output]]
+    while current_level:
+        tree.append(current_level)
+        next_level = []
+        for _ ,marking in current_level:
+            state = tuple(marking.tolist())
+            is_m = any(is_multiple_of(marking, visited_marking) for visited_marking in visited)
+            if state in visited or is_m:
+                continue
+            visited.add(state)
+            transitions = active_transitions(incidence_matrix, marking)
+            for transition, new_marking in transitions.items():
+                if tuple(new_marking) not in visited:
+                    noteq_count = 0
+                id = []
+                cur = current_level[-1][1]
+                if not all(n>=m for n,m in zip(cur,new_marking)):
+                    for n,m in cur,new_marking:
+                        if n>m:
+                            noteq_count += 1
+                            id.append(n)
+                        if noteq_count == 1 and cur[m] < new_marking[m]:
+                            for idx in id:
+                                new_marking[idx] = "w"
+            next_level.append([transition, new_marking])
+            current_level = next_level
+    return tree
+
+"""
+Accumulation [w]:
+if pos n-1 has equal values for all making except one (wich increases),
+then the marking is an accumulation of the previous one, them the tree
+should add w to the accumulated value, and do not add the same transition
+in this line.
+""" check functionallity and working output (substituting w for a big number temporarely or considering the output normal output in tree (if it consistes in high modding tree, give a plan instead))

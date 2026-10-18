@@ -1,17 +1,17 @@
-from petri import PETRI, State, Action
+from petri import PETRI, State, Transition
 
 
 def build_example_net():
     net = PETRI("Example Net")
     net.add_state(State("p1", "place 1"))
     net.add_state(State("p2", "place 2"))
-    net.add_action(Action("t1", "t1"))
-    net.add_action(Action("t2", "t2"))
-    # arcs: p1 -> t1, t1 -> p2, p2 -> t2, t2 -> p1 (a simple token hop)
-    net.add_transition_by_names("a1", "p1->t1", "p1", "t1")
-    net.add_transition_by_names("a2", "t1->p2", "t1", "p2")
-    net.add_transition_by_names("a3", "p2->t2", "p2", "t2")
-    net.add_transition_by_names("a4", "t2->p1", "t2", "p1")
+    net.add_transition(Transition("t1", "t1"))
+    net.add_transition(Transition("t2", "t2"))
+    # Arcs: p1 -> t1, t1 -> p2, p2 -> t2, t2 -> p1 (a simple token hop)
+    net.add_arc_by_names("a1", "p1->t1", "p1", "t1")
+    net.add_arc_by_names("a2", "t1->p2", "t1", "p2")
+    net.add_arc_by_names("a3", "p2->t2", "p2", "t2")
+    net.add_arc_by_names("a4", "t2->p1", "t2", "p1")
     net.set_ficha("p1", 1)
     net.set_ficha("p2", 0)
     return net

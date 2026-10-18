@@ -16,6 +16,7 @@
     </div>
     <div class="top-actions">
       <button id="theme-toggle">🌙 Dark mode</button>
+      <button id="settings-toggle">⚙ Settings</button>
       <button id="help-toggle">❓ Help</button>
     </div>
   </header>
@@ -28,7 +29,7 @@
         <h2>Build</h2>
         <button id="mode-select" class="active">↖ Select / Move</button>
         <button id="mode-state">◯ Add Place (State)</button>
-        <button id="mode-action">▮ Add Transition (Action)</button>
+        <button id="mode-transition">▮ Add Transition</button>
         <button id="mode-arc">→ Add Arc</button>
       </div>
 
@@ -36,6 +37,7 @@
         <h2>File</h2>
         <button id="btn-new">New net</button>
         <button id="btn-export">Export JSON</button>
+        <button id="btn-export-png">Export PNG…</button>
         <button id="btn-import">Import JSON…</button>
         <input type="file" id="file-input" accept="application/json" hidden>
       </div>
@@ -86,7 +88,7 @@
         <button id="matrix-output-tab">Marking</button>
       </div>
       <div id="matrix-content"></div>
-      <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward an Action; negative values enter a State from an Action. The Marking vector is the current ficha_count of each State.</div>
+      <div class="matrix-help">Incidence matrix follows PETRI.incidence_matrix: rows are States and columns are arcs. Positive values leave a State toward a Transition; negative values enter a State from a Transition. The Marking vector is the current ficha_count of each State.</div>
     </section>
   </div>
 
@@ -97,6 +99,59 @@
       <h2 id="reachability-title">↗ Reachability</h2>
       <div id="reachability-status" class="matrix-help" aria-live="polite"></div>
       <div id="reachability-content"></div>
+    </section>
+  </div>
+
+  <div id="export-modal" hidden>
+    <div id="export-backdrop"></div>
+    <section id="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <button id="export-close" class="modal-close" aria-label="Close export">×</button>
+      <h2 id="export-title">🖼 Export PNG</h2>
+      <div id="export-preview-wrap">
+        <img id="export-preview" alt="Export preview" hidden>
+        <div id="export-empty" hidden>Nothing to export yet. Add a place or transition first.</div>
+      </div>
+      <div id="export-info" class="matrix-help" aria-live="polite"></div>
+
+      <div class="export-options">
+        <fieldset class="setting">
+          <legend>Mode</legend>
+          <div class="segmented">
+            <label><input type="radio" name="export-theme" value="light"><span>☀ Light</span></label>
+            <label><input type="radio" name="export-theme" value="dark"><span>🌙 Dark</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="setting">
+          <legend>Background</legend>
+          <div class="segmented">
+            <label><input type="radio" name="export-background" value="transparent"><span>Empty</span></label>
+            <label><input type="radio" name="export-background" value="white"><span>White</span></label>
+            <label><input type="radio" name="export-background" value="black"><span>Black</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="setting">
+          <legend>Resolution</legend>
+          <div class="segmented">
+            <label><input type="radio" name="export-scale" value="1"><span>1×</span></label>
+            <label><input type="radio" name="export-scale" value="2"><span>2×</span></label>
+            <label><input type="radio" name="export-scale" value="3"><span>3×</span></label>
+            <label><input type="radio" name="export-scale" value="4"><span>4×</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="export-actions">
+        <button id="export-download" class="primary" disabled>⇩ Download PNG</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="settings-modal" hidden>
+    <div id="settings-backdrop"></div>
+    <section id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <button id="settings-close" class="modal-close" aria-label="Close settings">×</button>
+      <h2 id="settings-title">⚙ Settings</h2>
+      <div id="settings-content"></div>
+      <div class="matrix-help">Settings are saved in this browser and apply to future actions.</div>
     </section>
   </div>
 
@@ -132,11 +187,12 @@
           <div><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>Z</kbd><span>Redo</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd><span>Export net (JSON)</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>O</kbd><span>Import net (JSON)</span></div>
+          <div><kbd>Ctrl</kbd><span>+</span><kbd>E</kbd><span>Export as PNG…</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>M</kbd><span>Toggle matrices</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>D</kbd><span>Toggle dark mode</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>+</kbd> / <kbd>−</kbd><span>Zoom in / out</span></div>
           <div><kbd>Ctrl</kbd><span>+</span><kbd>0</kbd><span>Reset zoom (100%)</span></div>
-          <div><kbd>Delete</kbd><span>Delete selected element</span></div>
+          <div><kbd>Delete</kbd> / <kbd>Backspace</kbd><span>Delete selected element</span></div>
           <div><kbd>Space</kbd><span>Fire selected transition</span></div>
           <div><kbd>Esc</kbd><span>Deselect / cancel</span></div>
         </div>
