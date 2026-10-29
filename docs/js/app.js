@@ -48,7 +48,7 @@ const SETTINGS_SCHEMA = [
       {
         value: 'straight',
         label: 'Straight lines',
-        description: 'Arcs are straight. Only two opposite arcs between the same pair of nodes are bent apart.'
+        description: 'Arcs are straight. Drag a selected arc to break it into bent segments (bend points snap, so lines can be made horizontal or vertical). Two opposite arcs between the same nodes are bent apart.'
       },
       {
         value: 'spline',
@@ -56,6 +56,13 @@ const SETTINGS_SCHEMA = [
         description: 'Arcs are drawn as smooth curves that leave and enter nodes perpendicular to their edge. Drag a selected arc, or its two handles, to reshape it.'
       }
     ]
+  },
+  {
+    key: 'hideArcNames',
+    type: 'boolean',
+    label: 'Arc names',
+    description: 'Hide all arc names on the graph (weights above 1 stay visible)',
+    default: false
   }
 ];
 
@@ -116,6 +123,7 @@ const HINTS = {
 function emptyNet(name) {
   return {
     name,
+    description: '',          // free text about the whole net (edited in "Net description")
     states: [],
     transitions: [],
     arcs: [],
@@ -308,6 +316,7 @@ function normalizePoints(points) {
 
 function normalizeNet(data) {
   const n = emptyNet(data?.name || 'Untitled Net');
+  n.description = String(data?.description ?? '');
   const legacyFormat = !Array.isArray(data?.arcs);
   const transitionData = legacyFormat ? data?.actions : data?.transitions;
   const arcData = legacyFormat ? data?.transitions : data?.arcs;
@@ -1133,6 +1142,10 @@ function startDragNode(e) {
     // Spline mode: dragging the arc reshapes it.
     const arc = netData.arcs.find(item => item.name === hit.dataset.name);
     if (arc) startCurveBodyDrag(arc, pressPoint);
+  } else if (hit.dataset.kind === 'arc') {
+    // Straight mode: dragging the line breaks it with a bend point.
+    const arc = netData.arcs.find(item => item.name === hit.dataset.name);
+    if (arc) startBreakDrag(arc, pressPoint);
   } else {
     dragging = hit.dataset.name;
   }
@@ -1337,8 +1350,9 @@ svg.addEventListener('pointermove', e => {
   dragMoved = true;
 
   if (draggingCurve) {
-    updateCurveDrag(pt);
+    const guides = updateCurveDrag(pt, e.altKey);
     render();
+    renderGuides(guides);
     return;
   }
 
@@ -1426,6 +1440,8 @@ function snapLabelAnchor(label, pt, noSnap = false) {
 
 const endDrag = e => {
   if (dragging || draggingLabel || draggingCurve) {
+    // A press that moved a bend point is a drag, not the first half of a double press.
+    if (dragMoved) lastBendPress = { arc: null, index: -1, time: 0 };
     try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
     clearGuides();
     saveLocal();
@@ -1512,7 +1528,9 @@ function renderInspector() {
         (${canChooseType ? 'pre' : 'post'})</div>
       ${settings.arcShape === 'spline' ? `
         <div class="muted">Drag the curve or its handles to reshape it.</div>
-        ${t.curve ? '<button id="insp-reset-curve">↺ Reset curve</button>' : ''}` : ''}
+        ${t.curve ? '<button id="insp-reset-curve">↺ Reset curve</button>' : ''}` : `
+        <div class="muted">Drag the line to break it. Drag a point to move it; press it twice to remove it.</div>
+        ${t.points?.length ? '<button id="insp-reset-points">↺ Straighten line</button>' : ''}`}
       <div class="row"><label>Weight</label>
         <input id="insp-weight" type="number" min="1" value="${t.weight}"></div>
       ${canChooseType ? `
@@ -1537,6 +1555,8 @@ function renderInspector() {
     document.getElementById('insp-close').onclick = () => { mobileInspectorOpen = false; renderInspector(); };
     const resetCurve = document.getElementById('insp-reset-curve');
     if (resetCurve) resetCurve.onclick = () => { t.curve = null; saveLocal(); render(); };
+    const resetPoints = document.getElementById('insp-reset-points');
+    if (resetPoints) resetPoints.onclick = () => { t.points = []; saveLocal(); render(); };
     document.getElementById('insp-weight').onchange = applyArcChange;
     if (canChooseType) document.getElementById('insp-type').onchange = applyArcChange;
     document.getElementById('insp-delete').onclick = () => removeArc(t.name);
@@ -1806,14 +1826,21 @@ function render() {
     });
     g.appendChild(line);
 
-    const label = document.createElementNS(svg.namespaceURI, 'text');
-    label.setAttribute('x', midX + (t.label_dx ?? 6));
-    label.setAttribute('y', midY + (t.label_dy ?? -6));
-    label.setAttribute('class', 'arc-label');
-    label.dataset.name = t.name; label.dataset.kind = 'arc'; label.dataset.role = 'label';
-    label.dataset.part = 'name';
-    label.textContent = t.weight > 1 ? `${t.name} [${t.weight}]` : t.name;
-    g.appendChild(label);
+    // "Hide arc names" removes the name but keeps the weight when it is above 1,
+    // since the weight is part of the net's meaning. Nothing to draw otherwise.
+    const labelText = settings.hideArcNames
+      ? (t.weight > 1 ? `[${t.weight}]` : '')
+      : (t.weight > 1 ? `${t.name} [${t.weight}]` : t.name);
+    if (labelText) {
+      const label = document.createElementNS(svg.namespaceURI, 'text');
+      label.setAttribute('x', midX + (t.label_dx ?? 6));
+      label.setAttribute('y', midY + (t.label_dy ?? -6));
+      label.setAttribute('class', 'arc-label');
+      label.dataset.name = t.name; label.dataset.kind = 'arc'; label.dataset.role = 'label';
+      label.dataset.part = 'name';
+      label.textContent = labelText;
+      g.appendChild(label);
+    }
     arcsLayer.appendChild(g);
   }
 
@@ -1866,6 +1893,13 @@ function render() {
   renderCurveHandles();
   renderInspector();
   if (matrixOpen) renderMatrices();
+  updateNetDescButton();
+}
+
+// A dot on the button shows that the net already has a description.
+function updateNetDescButton() {
+  const button = document.getElementById('netdesc-toggle');
+  if (button) button.textContent = netData?.description?.trim() ? 'ⓘ Net description ●' : 'ⓘ Net description';
 }
 
 // Straight mode: the selected arc shows its bend points (solid) and a ghost
@@ -2362,9 +2396,41 @@ document.getElementById('btn-export-png').onclick = openExport;
 document.getElementById('export-close').onclick = closeExport;
 document.getElementById('export-backdrop').onclick = closeExport;
 
+// Net description dialog -----------------------------------------------------
+// A free-text space about the whole net. For now it is only stored (with the
+// net, in exports and in undo history); nothing else on screen uses it yet.
+const netDescModal = document.getElementById('netdesc-modal');
+const netDescText = document.getElementById('netdesc-text');
+const netDescCount = document.getElementById('netdesc-count');
+
+function updateNetDescCount() {
+  netDescCount.textContent = `${netDescText.value.length} characters`;
+}
+function openNetDesc() {
+  netDescText.value = netData.description || '';
+  updateNetDescCount();
+  netDescModal.hidden = false;
+  netDescText.focus();
+}
+function commitNetDesc() {
+  if (netDescText.value === (netData.description || '')) return;
+  netData.description = netDescText.value;
+  saveLocal();
+  updateNetDescButton();
+}
+function closeNetDesc() {
+  commitNetDesc();
+  netDescModal.hidden = true;
+}
+netDescText.addEventListener('input', updateNetDescCount);
+netDescText.addEventListener('change', commitNetDesc);       // also fires on blur
+document.getElementById('netdesc-toggle').onclick = openNetDesc;
+document.getElementById('netdesc-close').onclick = closeNetDesc;
+document.getElementById('netdesc-backdrop').onclick = closeNetDesc;
+
 function anyModalOpen() {
   return !helpModal.hidden || !settingsModal.hidden || !exportModal.hidden ||
-         !reachabilityModal.hidden || matrixOpen;
+         !netDescModal.hidden || !reachabilityModal.hidden || matrixOpen;
 }
 
 function isTypingTarget(target) {
@@ -2379,6 +2445,7 @@ document.addEventListener('keydown', e => {
     if (!helpModal.hidden) { closeHelp(); return; }
     if (!settingsModal.hidden) { closeSettings(); return; }
     if (!exportModal.hidden) { closeExport(); return; }
+    if (!netDescModal.hidden) { closeNetDesc(); return; }
     if (matrixOpen) { closeMatrices(); return; }
     if (!reachabilityModal.hidden) { closeReachability(); return; }
     selected = null;

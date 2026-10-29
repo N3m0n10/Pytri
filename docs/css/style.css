@@ -779,7 +779,7 @@ button.primary:disabled { opacity: .5; cursor: not-allowed; }
 }
 
 /* Keep the floating options button out of the way of open dialogs */
-body:has(#export-modal:not([hidden]), #settings-modal:not([hidden]), #help-modal:not([hidden]),
+body:has(#export-modal:not([hidden]), #netdesc-modal:not([hidden]), #settings-modal:not([hidden]), #help-modal:not([hidden]),
          #matrix-modal:not([hidden]), #reachability-modal:not([hidden])) .entity-options-btn {
   display: none !important;
 }
@@ -807,3 +807,43 @@ body:has(#export-modal:not([hidden]), #settings-modal:not([hidden]), #help-modal
 }
 .curve-handle:hover { fill: var(--accent-soft); }
 .curve-handle:active { cursor: grabbing; }
+
+/* Ghost handle: drag it to break a straight arc at that segment */
+.curve-ghost {
+  fill: var(--surface); stroke: var(--accent); stroke-width: 1.5;
+  opacity: .55; cursor: copy; transition: opacity .12s ease;
+}
+.curve-ghost:hover { opacity: 1; }
+
+/* Net description dialog */
+#netdesc-modal[hidden] { display: none; }
+#netdesc-modal { position: fixed; inset: 0; z-index: 100; }
+#netdesc-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(2px);
+}
+#netdesc-dialog {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(640px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 55px rgba(0,0,0,.22);
+  padding: 22px;
+}
+#netdesc-title { margin: 0 35px 14px 0; font-size: 22px; }
+#netdesc-text {
+  display: block; width: 100%;
+  min-height: 200px; max-height: 55dvh; resize: vertical;
+  font: inherit; font-size: 14px; line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--paper); color: var(--ink);
+}
+#netdesc-text:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.netdesc-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 4px; }

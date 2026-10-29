@@ -46,6 +46,7 @@
         <h2>View</h2>
         <button id="matrix-toggle">▦ Matrices</button>
         <button id="reachability-toggle">↗ Check reachability</button>
+        <button id="netdesc-toggle">ⓘ Net description</button>
       </div>
 
       <div id="hint">Click "Add Place" or "Add Transition", then click on the canvas to drop a node. Switch to "Add Arc" and click a source node then a target node to connect them. Drag a node's body to move it, or drag its name (or an arc's label) to reposition the text.</div>
@@ -100,6 +101,19 @@
       <h2 id="reachability-title">↗ Reachability</h2>
       <div id="reachability-status" class="matrix-help" aria-live="polite"></div>
       <div id="reachability-content"></div>
+    </section>
+  </div>
+
+  <div id="netdesc-modal" hidden>
+    <div id="netdesc-backdrop"></div>
+    <section id="netdesc-dialog" role="dialog" aria-modal="true" aria-labelledby="netdesc-title">
+      <button id="netdesc-close" class="modal-close" aria-label="Close net description">×</button>
+      <h2 id="netdesc-title">ⓘ Net description</h2>
+      <textarea id="netdesc-text" rows="10" placeholder="Describe what this net models: its purpose, places, transitions, assumptions…"></textarea>
+      <div class="netdesc-foot">
+        <span id="netdesc-count" class="matrix-help"></span>
+        <span class="matrix-help">Saved with the net and included in JSON exports.</span>
+      </div>
     </section>
   </div>
 
@@ -171,7 +185,7 @@
           <div>
             <article class="help-item"><span class="help-icon">◯</span><div><h3>Create elements</h3><p>Use the toolbar to add places, transitions and arcs. Click on the canvas to place an element.</p></div></article>
             <article class="help-item"><span class="help-icon">↗</span><div><h3>Connect elements</h3><p>Choose <b>Add Arc</b>, then click a source element and a target element. Configure the arc type and weight in the inspector.</p></div></article>
-            <article class="help-item"><span class="help-icon">✎</span><div><h3>Edit</h3><p>Select an element to move, rename, rotate or delete it. Drag labels independently to reposition them. With Smooth splines on (Settings), drag an arc or its handles to reshape the curve.</p></div></article>
+            <article class="help-item"><span class="help-icon">✎</span><div><h3>Edit</h3><p>Select an element to move, rename, rotate or delete it. Drag labels independently to reposition them. Drag an arc to bend it: with Straight lines it breaks into segments (press a bend point twice to remove it); with Smooth splines (Settings) it reshapes the curve.</p></div></article>
           </div>
           <div>
             <article class="help-item"><span class="help-icon">▦</span><div><h3>Matrices</h3><p>The incidence matrix describes the relation between places and arcs. The marking vector shows the current number of tokens in each place.</p></div></article>
