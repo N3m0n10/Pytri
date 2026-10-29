@@ -397,12 +397,6 @@ class PETRI:
             type_list.append("Free of conflicts")
             if pres == set(pres):
                 type_list.append("Marked Graph")
-        if any(pres.count(pre) > 1 for pre in set(pres)):
-            type_list.append("Free Choice")
-            #    type_list.append("Expanded Free Choice") # TODO: annoying
-        if any(arc.value > 1 for arc in self.arcs.values()):
-            type_list.append("Generalized")
-        # type_list.append("Live")
         return type_list
 
     @property  # NOTE: This is a stub for future work. The idea is to build a reachability tree of all possible markings from the current marking, but this is not yet implemented.

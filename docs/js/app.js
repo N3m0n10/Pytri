@@ -2406,9 +2406,106 @@ const netDescCount = document.getElementById('netdesc-count');
 function updateNetDescCount() {
   netDescCount.textContent = `${netDescText.value.length} characters`;
 }
+
+// Structural Petri-net classification ---------------------------------------
+// Build the pre/post incidence relations from the current arcs. Rows are
+// places (states), columns are transitions. Multiple arcs are accumulated.
+function getStructuralMatrices() {
+  const states = netData.states;
+  const transitions = netData.transitions;
+  const pre = states.map(() => transitions.map(() => 0));
+  const post = states.map(() => transitions.map(() => 0));
+
+  const stateIndex = new Map(states.map((state, i) => [state.name, i]));
+  const transitionIndex = new Map(transitions.map((transition, i) => [transition.name, i]));
+
+  for (const arc of netData.arcs) {
+    const weight = Number(arc.weight) || 1;
+    const sourceState = stateIndex.get(arc.source);
+    const targetState = stateIndex.get(arc.target);
+    const sourceTransition = transitionIndex.get(arc.source);
+    const targetTransition = transitionIndex.get(arc.target);
+
+    if (sourceState !== undefined && targetTransition !== undefined) {
+      pre[sourceState][targetTransition] += weight;
+    }
+    if (sourceTransition !== undefined && targetState !== undefined) {
+      post[targetState][sourceTransition] += weight;
+    }
+  }
+  return { pre, post };
+}
+
+function getNetStructuralTypes() {
+  const { pre, post } = getStructuralMatrices();
+  const states = netData.states;
+  const transitions = netData.transitions;
+  const arcs = netData.arcs;
+
+  const ordinary = arcs.every(arc =>
+    arc.arc_type === 'normal' && Number(arc.weight) === 1
+  );
+
+  // A state-machine transition has exactly one input and one output place.
+  const stateMachine = transitions.length > 0 && transitions.every((_, j) => {
+    const inputCount = pre.reduce((sum, row) => sum + (row[j] > 0 ? 1 : 0), 0);
+    const outputCount = post.reduce((sum, row) => sum + (row[j] > 0 ? 1 : 0), 0);
+    return inputCount === 1 && outputCount === 1;
+  });
+
+  const oneToken = states.reduce((sum, state) =>
+    sum + Math.max(0, Number(state.ficha_count) || 0), 0
+  ) === 1;
+
+  // Conflict-free: no place feeds more than one transition.
+  const conflictFree = pre.every(row =>
+    row.filter(value => value > 0).length <= 1
+  );
+
+  // Marked graph: every place has exactly one input and one output transition.
+  const markedGraph = states.length > 0 && states.every((_, i) => {
+    const inputCount = post[i].filter(value => value > 0).length;
+    const outputCount = pre[i].filter(value => value > 0).length;
+    return inputCount === 1 && outputCount === 1;
+  });
+
+  const types = [];
+  if (ordinary) types.push('Ordinary');
+  if (stateMachine) types.push('State Machine');
+  if (stateMachine && oneToken) types.push('Automata-like');
+  if (conflictFree) types.push('Conflict-free');
+  if (markedGraph) types.push('Marked Graph');
+
+  return { types, ordinary, stateMachine, oneToken, conflictFree, markedGraph };
+}
+
+function renderNetStructuralAnalysis() {
+  const panel = document.getElementById('netdesc-analysis');
+  if (!panel) return;
+
+  const result = getNetStructuralTypes();
+  const properties = [
+    ['Ordinary', result.ordinary],
+    ['State Machine', result.stateMachine],
+    ['Automata-like (one token)', result.stateMachine && result.oneToken],
+    ['Conflict-free', result.conflictFree],
+    ['Marked Graph', result.markedGraph]
+  ];
+
+  panel.innerHTML = `
+    <div class="analysis-heading">Structural classification</div>
+    <div class="analysis-tags">
+      ${properties.map(([label, enabled]) =>
+        `<span class="analysis-tag ${enabled ? 'yes' : 'no'}">${enabled ? '✓' : '—'} ${label}</span>`
+      ).join('')}
+    </div>
+    <p class="analysis-note">Computed from the current place-transition pre/post matrix and marking. “Automata-like” here means a state machine with exactly one token in the net.</p>
+  `;
+}
 function openNetDesc() {
   netDescText.value = netData.description || '';
   updateNetDescCount();
+  renderNetStructuralAnalysis();
   netDescModal.hidden = false;
   netDescText.focus();
 }
