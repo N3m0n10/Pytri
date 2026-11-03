@@ -1,5 +1,11 @@
 # Petri Net Prototyper
 
+## Try online
+
+You can use [online_version](https://n3m0n10.github.io/Pytri/) for running it online. 
+This version is a build in css/js and is placed at */docs*!
+It also works with mobile!
+
 ## Run it
     pip install -r requirements.txt
     python3 app.py
@@ -28,8 +34,6 @@ The `Simulation` class remains a stub while timed-transition semantics are
 being considered. Reachability and coverability remain separate from timed
 simulation.
 
-## Run online
+## About updates
 
-You can use [online_version](https://n3m0n10.github.io/Pytri/) for running it online. 
-This version is a build in css/js and is placed at */docs*!
-It also works with mobile!
+If you want any features implemented, feel free to contribute!
