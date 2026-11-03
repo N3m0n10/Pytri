@@ -398,9 +398,6 @@ function isEnabled(transitionName) {
   const pre = netData.arcs.filter(arc =>
     arc.target === transitionName && nodeKind(arc.source) === 'state'
   );
-  // An inhibitor arc only vetoes: it can never be the reason a transition is
-  // enabled, so a transition fed solely by inhibitor arcs is never enabled.
-  if (pre.length && pre.every(arc => arc.arc_type === 'inhibitor')) return false;
   for (const arc of pre) {
     const state = findNode(arc.source);
     if (arc.arc_type === 'inhibitor') {
@@ -671,7 +668,7 @@ function computeReachability() {
     const sourceNode = nodes[queueIndex];
     if (sourceNode.terminal) continue;
     for (const { transition, inputArcs, outputArcs } of transitionArcs) {
-      const enabled = !(inputArcs.length && inputArcs.every(arc => arc.arc_type === 'inhibitor')) && inputArcs.every(arc => {
+      const enabled = inputArcs.every(arc => {
         const tokens = sourceNode.marking[stateIndex.get(arc.source)];
         return arc.arc_type === 'inhibitor'
           ? tokens < arc.weight
