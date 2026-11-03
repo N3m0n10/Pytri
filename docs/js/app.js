@@ -144,8 +144,11 @@ function nameTaken(name) {
 function syncRenameBuffer() {
   // Imported/old localStorage data may not have the buffer. Keep only names
   // that are currently free and unique.
+  // Each buffer may only hold names of its own kind (p* / t* / a*), so a stale
+  // or mixed-up buffer can never hand an arc name to a transition, etc.
   for (const kind of Object.keys(renameBuffer)) {
-    renameBuffer[kind] = [...new Set(renameBuffer[kind])].filter(n => !nameTaken(n));
+    renameBuffer[kind] = [...new Set(renameBuffer[kind])]
+      .filter(n => autoNumber(kind, n) !== null && !nameTaken(n));
   }
 }
 
@@ -202,13 +205,16 @@ function nodeKind(name) {
 }
 
 function restoreRenameBuffer(saved, legacyFormat = false) {
-  renameBuffer.state = Array.isArray(saved?.state) ? saved.state.map(String) : [];
-  renameBuffer.transition = Array.isArray(saved?.transition)
-    ? saved.transition.map(String)
-    : Array.isArray(saved?.action) ? saved.action.map(String) : [];
-  renameBuffer.arc = Array.isArray(saved?.arc)
-    ? saved.arc.map(String)
-    : legacyFormat && Array.isArray(saved?.transition) ? saved.transition.map(String) : [];
+  const list = v => Array.isArray(v) ? v.map(String) : [];
+  renameBuffer.state = list(saved?.state);
+  if (legacyFormat) {
+    // Old builds called transitions "action" and arcs "transition".
+    renameBuffer.transition = list(saved?.action);
+    renameBuffer.arc = list(saved?.transition);
+  } else {
+    renameBuffer.transition = Array.isArray(saved?.transition) ? list(saved.transition) : list(saved?.action);
+    renameBuffer.arc = list(saved?.arc);
+  }
 }
 
 function showError(msg) {
@@ -392,6 +398,9 @@ function isEnabled(transitionName) {
   const pre = netData.arcs.filter(arc =>
     arc.target === transitionName && nodeKind(arc.source) === 'state'
   );
+  // An inhibitor arc only vetoes: it can never be the reason a transition is
+  // enabled, so a transition fed solely by inhibitor arcs is never enabled.
+  if (pre.length && pre.every(arc => arc.arc_type === 'inhibitor')) return false;
   for (const arc of pre) {
     const state = findNode(arc.source);
     if (arc.arc_type === 'inhibitor') {
@@ -662,7 +671,7 @@ function computeReachability() {
     const sourceNode = nodes[queueIndex];
     if (sourceNode.terminal) continue;
     for (const { transition, inputArcs, outputArcs } of transitionArcs) {
-      const enabled = inputArcs.every(arc => {
+      const enabled = !(inputArcs.length && inputArcs.every(arc => arc.arc_type === 'inhibitor')) && inputArcs.every(arc => {
         const tokens = sourceNode.marking[stateIndex.get(arc.source)];
         return arc.arc_type === 'inhibitor'
           ? tokens < arc.weight
@@ -1110,6 +1119,8 @@ canvasWrap.addEventListener('pointerup', endPan);
 canvasWrap.addEventListener('pointercancel', endPan);
 
 // Interação de Drag (Mover Nós e Legendas)
+let lastTransitionPress = null;
+
 function startDragNode(e) {
   if (mode !== 'select') return;
   const hit = e.target.closest('[data-name]');
@@ -1125,6 +1136,22 @@ function startDragNode(e) {
 
   pressedEntity = true;
   dragMoved = false;
+
+  // Double-click / double-tap a transition fires it. Detected on press because
+  // selecting re-renders the node, so the browser never emits a dblclick.
+  if (hit.dataset.kind === 'transition' && !isLabel) {
+    const now = performance.now();
+    const prev = lastTransitionPress;
+    if (prev && prev.name === hit.dataset.name && now - prev.time < 400 &&
+        Math.hypot(pressPoint.x - prev.x, pressPoint.y - prev.y) < 8) {
+      lastTransitionPress = null;
+      try { fireTransition(hit.dataset.name); } catch (err) { showError(err.message); }
+      return;
+    }
+    lastTransitionPress = { name: hit.dataset.name, time: now, x: pressPoint.x, y: pressPoint.y };
+  } else {
+    lastTransitionPress = null;
+  }
 
   if (isLabel) {
     // Remember where inside the text it was grabbed so it follows the pointer
@@ -2406,106 +2433,9 @@ const netDescCount = document.getElementById('netdesc-count');
 function updateNetDescCount() {
   netDescCount.textContent = `${netDescText.value.length} characters`;
 }
-
-// Structural Petri-net classification ---------------------------------------
-// Build the pre/post incidence relations from the current arcs. Rows are
-// places (states), columns are transitions. Multiple arcs are accumulated.
-function getStructuralMatrices() {
-  const states = netData.states;
-  const transitions = netData.transitions;
-  const pre = states.map(() => transitions.map(() => 0));
-  const post = states.map(() => transitions.map(() => 0));
-
-  const stateIndex = new Map(states.map((state, i) => [state.name, i]));
-  const transitionIndex = new Map(transitions.map((transition, i) => [transition.name, i]));
-
-  for (const arc of netData.arcs) {
-    const weight = Number(arc.weight) || 1;
-    const sourceState = stateIndex.get(arc.source);
-    const targetState = stateIndex.get(arc.target);
-    const sourceTransition = transitionIndex.get(arc.source);
-    const targetTransition = transitionIndex.get(arc.target);
-
-    if (sourceState !== undefined && targetTransition !== undefined) {
-      pre[sourceState][targetTransition] += weight;
-    }
-    if (sourceTransition !== undefined && targetState !== undefined) {
-      post[targetState][sourceTransition] += weight;
-    }
-  }
-  return { pre, post };
-}
-
-function getNetStructuralTypes() {
-  const { pre, post } = getStructuralMatrices();
-  const states = netData.states;
-  const transitions = netData.transitions;
-  const arcs = netData.arcs;
-
-  const ordinary = arcs.every(arc =>
-    arc.arc_type === 'normal' && Number(arc.weight) === 1
-  );
-
-  // A state-machine transition has exactly one input and one output place.
-  const stateMachine = transitions.length > 0 && transitions.every((_, j) => {
-    const inputCount = pre.reduce((sum, row) => sum + (row[j] > 0 ? 1 : 0), 0);
-    const outputCount = post.reduce((sum, row) => sum + (row[j] > 0 ? 1 : 0), 0);
-    return inputCount === 1 && outputCount === 1;
-  });
-
-  const oneToken = states.reduce((sum, state) =>
-    sum + Math.max(0, Number(state.ficha_count) || 0), 0
-  ) === 1;
-
-  // Conflict-free: no place feeds more than one transition.
-  const conflictFree = pre.every(row =>
-    row.filter(value => value > 0).length <= 1
-  );
-
-  // Marked graph: every place has exactly one input and one output transition.
-  const markedGraph = states.length > 0 && states.every((_, i) => {
-    const inputCount = post[i].filter(value => value > 0).length;
-    const outputCount = pre[i].filter(value => value > 0).length;
-    return inputCount === 1 && outputCount === 1;
-  });
-
-  const types = [];
-  if (ordinary) types.push('Ordinary');
-  if (stateMachine) types.push('State Machine');
-  if (stateMachine && oneToken) types.push('Automata-like');
-  if (conflictFree) types.push('Conflict-free');
-  if (markedGraph) types.push('Marked Graph');
-
-  return { types, ordinary, stateMachine, oneToken, conflictFree, markedGraph };
-}
-
-function renderNetStructuralAnalysis() {
-  const panel = document.getElementById('netdesc-analysis');
-  if (!panel) return;
-
-  const result = getNetStructuralTypes();
-  const properties = [
-    ['Ordinary', result.ordinary],
-    ['State Machine', result.stateMachine],
-    ['Automata-like (one token)', result.stateMachine && result.oneToken],
-    ['Conflict-free', result.conflictFree],
-    ['Marked Graph', result.markedGraph]
-  ];
-
-  panel.innerHTML = `
-    <div class="analysis-heading">Structural classification</div>
-    <div class="analysis-tags">
-      ${properties.map(([label, enabled]) =>
-        `<span class="analysis-tag ${enabled ? 'yes' : 'no'}">${enabled ? '✓' : '—'} ${label}</span>`
-      ).join('')}
-    </div>
-    <p class="analysis-note">Computed from the current place-transition pre/post matrix and marking. “Automata-like” here means a state machine with exactly one token in the net.</p>
-  `;
-}
 function openNetDesc() {
   netDescText.value = netData.description || '';
   updateNetDescCount();
-  renderNetStructuralAnalysis();
   netDescModal.hidden = false;
   netDescText.focus();
 }
