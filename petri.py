@@ -481,6 +481,99 @@ class PETRI:
             current_level = [marking for marking, _, _, terminal in next_level if not terminal]
 
         return levels
+
+    def coverability_tree(self, max_levels=10):
+        """Build a Karp-Miller coverability tree, using "ω" for unbounded places.
+
+        Returns (levels, truncated), where each node has the same tuple shape
+        as tree_mtrx. Inhibitor arcs are unsupported because they break the
+        monotonicity required by the Karp-Miller construction.
+        """
+        if not isinstance(max_levels, int) or max_levels < 1:
+            raise ValueError("max_levels must be a positive integer.")
+        if any(arc.arc_type == "inhibitor" for arc in self.arcs.values()):
+            raise PetriError(
+                "Coverability trees do not support inhibitor arcs."
+            )
+        if not self.states:
+            return [], False
+
+        omega = "ω"
+        state_names = list(self.states)
+        state_index = {name: index for index, name in enumerate(state_names)}
+        transitions = list(self.transitions.values())
+        root = [state.ficha_count for state in self.states.values()]
+        levels = [[(root, [0] * len(transitions), None, False)]]
+        current_level = [(root, (root,))]
+
+        def at_least(left, right):
+            return left == omega or (right != omega and left >= right)
+
+        def greater(left, right):
+            return left == omega and right != omega or (
+                left != omega and right != omega and left > right
+            )
+
+        def enabled_transitions(marking):
+            enabled = []
+            for index, transition in enumerate(transitions):
+                is_enabled = True
+                for arc in self.pre_arcs(transition.name):
+                    tokens = marking[state_index[arc.source.name]]
+                    if arc.arc_type == "normal" and tokens != omega and tokens < arc.weight:
+                        is_enabled = False
+                        break
+                    if arc.arc_type == "read" and tokens != omega and tokens < arc.weight:
+                        is_enabled = False
+                        break
+                if is_enabled:
+                    enabled.append((index, transition))
+            return enabled
+
+        while current_level and len(levels) < max_levels:
+            next_level = []
+            next_frontier = []
+            for marking, ancestors in current_level:
+                for transition_index, transition in enabled_transitions(marking):
+                    child = list(marking)
+                    for arc in self.pre_arcs(transition.name):
+                        if arc.arc_type == "normal":
+                            place_index = state_index[arc.source.name]
+                            if child[place_index] != omega:
+                                child[place_index] -= arc.weight
+                    for arc in self.post_arcs(transition.name):
+                        place_index = state_index[arc.target.name]
+                        if child[place_index] != omega:
+                            child[place_index] += arc.weight
+
+                    changed = True
+                    while changed:
+                        changed = False
+                        for ancestor in ancestors:
+                            if all(at_least(value, previous)
+                                   for value, previous in zip(child, ancestor)):
+                                for index, (value, previous) in enumerate(zip(child, ancestor)):
+                                    if greater(value, previous) and child[index] != omega:
+                                        child[index] = omega
+                                        changed = True
+
+                    terminal = any(child == ancestor for ancestor in ancestors)
+                    fired = [0] * len(transitions)
+                    fired[transition_index] = 1
+                    next_level.append(
+                        (child, fired, transition.name, terminal)
+                    )
+                    if not terminal:
+                        next_frontier.append((child, ancestors + (child,)))
+
+            if next_level:
+                levels.append(next_level)
+            current_level = next_frontier
+
+        truncated = bool(current_level) and any(
+            enabled_transitions(marking) for marking, _ in current_level
+        )
+        return levels, truncated
         
     @property
     def tree_test(self):
