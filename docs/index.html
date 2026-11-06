@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Petri Net Prototyper</title>
   <link rel="stylesheet" href="css/style.css">
+<style>
+    #netdesc-analysis { border: 1px solid var(--line); border-radius: 7px; padding: 12px; margin: 0 0 12px; background: var(--paper); }
+    #netdesc-analysis .analysis-heading { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 9px; }
+    #netdesc-analysis .analysis-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    #netdesc-analysis .analysis-tag { display: inline-flex; align-items: center; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; background: var(--surface); color: var(--ink); }
+    #netdesc-analysis .analysis-tag.yes { border-color: var(--enabled); color: var(--enabled); }
+    #netdesc-analysis .analysis-tag.no { color: var(--muted); }
+    #netdesc-analysis .analysis-note { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 9px 0 0; }
+    @media (max-width: 560px) { #netdesc-analysis { padding: 9px; } }
+  </style>
 </head>
 <body>
   <header id="topbar">
@@ -109,6 +119,7 @@
     <section id="netdesc-dialog" role="dialog" aria-modal="true" aria-labelledby="netdesc-title">
       <button id="netdesc-close" class="modal-close" aria-label="Close net description">×</button>
       <h2 id="netdesc-title">ⓘ Net description</h2>
+      <section id="netdesc-analysis" aria-live="polite"></section>
       <textarea id="netdesc-text" rows="10" placeholder="Describe what this net models: its purpose, places, transitions, assumptions…"></textarea>
       <div class="netdesc-foot">
         <span id="netdesc-count" class="matrix-help"></span>
